@@ -6,7 +6,7 @@ export interface Question {
   timeLimit: number; // in seconds (e.g., 20)
   topic?: string;
   points?: number;
-  origin?: 'manual' | 'txt' | 'csv' | 'xlsx' | 'docx';
+  origin?: 'manual' | 'txt' | 'csv' | 'xlsx' | 'docx' | 'pasted_text';
   createdAt?: string;
 }
 

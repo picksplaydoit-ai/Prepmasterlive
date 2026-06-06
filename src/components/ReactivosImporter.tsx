@@ -275,6 +275,88 @@ Tema: Física`;
   };
 
   const [showTemplateMenu, setShowTemplateMenu] = useState(false);
+  const [activeTab, setActiveTab] = useState<'file' | 'pasted'>('file');
+  const [pastedText, setPastedText] = useState("");
+
+  const handleLoadSample = () => {
+    setPastedText(`¿Cuál es la fórmula del agua?
+A) CO2
+B) H2O
+C) NaCl
+D) O2
+Respuesta: B
+Tiempo: 30
+Puntos: 1000
+Tema: Química
+
+Pregunta:
+¿Qué estudia la toxicología de alimentos?
+A) Nutrición
+B) Efectos nocivos de sustancias químicas
+C) Microbiología
+D) Gastronomía
+Respuesta: B
+Tiempo: 30
+Puntos: 1000
+Tema: Toxicología
+
+1. ¿De qué color es el residuo tóxico reactivo en la industria?
+A) Rosa
+B) Celeste
+C) Amarillo
+D) Verde
+Respuesta: C
+Tiempo: 20
+Puntos: 800
+Tema: Seguridad industrial`);
+  };
+
+  const handleClearPastedText = () => {
+    setPastedText("");
+    setQuestions([]);
+    setUploadError(null);
+  };
+
+  const handleAnalyzePastedText = async () => {
+    setUploadError(null);
+    setQuestions([]);
+    if (!pastedText.trim()) {
+      setUploadError("Por favor ingresa un fragmento de texto para analizar.");
+      return;
+    }
+
+    setParsing(true);
+    try {
+      const response = await fetch("/api/parse-pasted-text", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: pastedText })
+      });
+
+      if (response.ok) {
+        const resData = await response.json();
+        if (resData.success && resData.questions) {
+          const mapped: TempQuestion[] = resData.questions.map((q: any, index: number) => ({
+            ...q,
+            localId: `tq_${Date.now()}_${index}`
+          }));
+          setQuestions(mapped);
+          if (mapped.length === 0) {
+            setUploadError("No se pudieron identificar reactivos en el texto ingresado. Compara el texto con el ejemplo para asegurar formato compatible.");
+          }
+        } else {
+          setUploadError(resData.error || "Ocurrió un error interpretando el texto pegado.");
+        }
+      } else {
+        const errBody = await response.json();
+        setUploadError(errBody.error || "Error del servidor al procesar el texto.");
+      }
+    } catch (err) {
+      setUploadError("No se pudo conectar al endpoint de parseo de texto.");
+    } finally {
+      setParsing(false);
+    }
+  };
 
   // List of parsed questions
   const [questions, setQuestions] = useState<TempQuestion[]>([]);
@@ -560,13 +642,15 @@ Tema: Física`;
         finalTitle = newTitle.trim();
         finalDesc = newDesc.trim();
         
-        let fileExtStr: 'manual' | 'txt' | 'csv' | 'xlsx' | 'docx' = "manual";
+        let fileExtStr: 'manual' | 'txt' | 'csv' | 'xlsx' | 'docx' | 'pasted_text' = "manual";
         if (file) {
           const ext = file.name.split(".").pop()?.toLowerCase();
           if (ext === "xlsx" || ext === "xls") fileExtStr = "xlsx";
           else if (ext === "csv") fileExtStr = "csv";
           else if (ext === "docx") fileExtStr = "docx";
           else if (ext === "txt") fileExtStr = "txt";
+        } else if (activeTab === "pasted") {
+          fileExtStr = "pasted_text";
         }
 
         // Convert TempQuestion back to Question schema
@@ -601,13 +685,15 @@ Tema: Física`;
         finalDesc = existing.description || "";
         createdAtStr = existing.createdAt || new Date().toISOString();
 
-        let fileExtStr: 'manual' | 'txt' | 'csv' | 'xlsx' | 'docx' = "manual";
+        let fileExtStr: 'manual' | 'txt' | 'csv' | 'xlsx' | 'docx' | 'pasted_text' = "manual";
         if (file) {
           const ext = file.name.split(".").pop()?.toLowerCase();
           if (ext === "xlsx" || ext === "xls") fileExtStr = "xlsx";
           else if (ext === "csv") fileExtStr = "csv";
           else if (ext === "docx") fileExtStr = "docx";
           else if (ext === "txt") fileExtStr = "txt";
+        } else if (activeTab === "pasted") {
+          fileExtStr = "pasted_text";
         }
 
         // Convert existing and add the new ones
@@ -709,134 +795,238 @@ Tema: Física`;
         </div>
       )}
 
-      {/* 1. UPLOAD DECK */}
-      {!file && (
-        <div className="space-y-6" id="upload-deck">
-          {/* Visual Guide Header & Template Download Options */}
-          <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4 text-left shadow-sm" id="visual-guide-section">
-            <h3 className="text-sm font-black uppercase tracking-wider text-indigo-700 flex items-center gap-1.5 font-sans">
-              <HelpCircle size={18} />
-              <span>¿Cómo preparar tus reactivos?</span>
-            </h3>
-            
-            <ul className="space-y-2.5 text-xs font-semibold text-slate-650 list-disc list-inside leading-relaxed font-sans">
-              <li>Usa una pregunta por fila en Excel o CSV.</li>
-              <li>Marca la respuesta correcta únicamente con la letra <strong className="text-indigo-600 font-bold">A, B, C o D</strong>.</li>
-              <li>Si dejas el campo de tiempo vacío, se usará el valor predeterminado de <strong className="text-slate-900 font-bold">30 segundos</strong>.</li>
-              <li>Si dejas el campo de puntos vacío, se acumularán <strong className="text-slate-950 font-bold">1000 puntos</strong> estándar.</li>
-              <li>El tema ingresado ayuda a categorizar tus reactivos y generar estadísticas de aprendizaje después.</li>
-            </ul>
-            
-            <div className="pt-3.5 border-t border-slate-200 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
-              <button 
-                onClick={() => setShowTemplateMenu(!showTemplateMenu)}
-                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-sans font-bold text-xs px-4.5 py-2.5 rounded-xl shadow-md transition-all cursor-pointer"
-                id="btn-download-templates-master"
-              >
-                <FileSpreadsheet size={15} />
-                <span>Descargar plantillas de ejemplo</span>
-              </button>
-              
-              {showTemplateMenu && (
-                <div className="flex flex-wrap gap-2 animate-fade-in" id="templates-download-menu">
-                  <button 
-                    onClick={downloadXLSXTemplate}
-                    className="flex items-center gap-1.5 bg-white border border-slate-250 hover:border-emerald-500 hover:text-emerald-700 font-sans font-bold text-xs px-3 py-2 rounded-lg shadow-sm transition-all cursor-pointer"
-                  >
-                    <FileSpreadsheet size={14} className="text-emerald-600" />
-                    <span>Excel (.xlsx)</span>
-                  </button>
-                  <button 
-                    onClick={downloadCSVTemplate}
-                    className="flex items-center gap-1.5 bg-white border border-slate-250 hover:border-teal-500 hover:text-teal-700 font-sans font-bold text-xs px-3 py-2 rounded-lg shadow-sm transition-all cursor-pointer"
-                  >
-                    <FileSpreadsheet size={14} className="text-teal-600" />
-                    <span>Ejemplo CSV (.csv)</span>
-                  </button>
-                  <button 
-                    onClick={downloadTXTTemplate}
-                    className="flex items-center gap-1.5 bg-white border border-slate-250 hover:border-indigo-500 hover:text-indigo-700 font-sans font-bold text-xs px-3 py-2 rounded-lg shadow-sm transition-all cursor-pointer"
-                  >
-                    <FileText size={14} className="text-indigo-600" />
-                    <span>Plantilla TXT (.txt)</span>
-                  </button>
-                </div>
-              )}
-
-              {!showTemplateMenu && (
-                <span className="text-[11px] text-slate-400 font-medium font-sans">Soporta archivos TXT, CSV, Excel (XLSX) y Word (DOCX)</span>
-              )}
-            </div>
-          </div>
-
-          <div
-            onDragEnter={handleDrag}
-            onDragOver={handleDrag}
-            onDragLeave={handleDrag}
-            onDrop={handleDrop}
-            className={`cursor-pointer rounded-2xl border-2 border-dashed p-10 text-center transition-all flex flex-col items-center justify-center gap-4 ${
-              dragActive 
-                ? "border-indigo-500 bg-indigo-50/50" 
-                : "border-slate-300 hover:border-indigo-400 bg-white"
+      {/* Target Tabs Selection for Importer Source */}
+      {!file && questions.length === 0 && !parsing && (
+        <div className="flex border-b border-slate-200 mb-6 gap-2" id="importer-tabs">
+          <button
+            type="button"
+            onClick={() => setActiveTab("file")}
+            className={`pb-3 px-4 text-xs sm:text-sm font-black transition-all cursor-pointer border-b-2 flex items-center gap-2 ${
+              activeTab === "file"
+                ? "border-indigo-600 text-indigo-700 font-extrabold text-slate-900"
+                : "border-transparent text-slate-450 hover:text-slate-600 font-bold"
             }`}
-            id="drag-and-drop-deck"
-            onClick={() => document.getElementById("file-loader-input")?.click()}
           >
-            <input
-              id="file-loader-input"
-              type="file"
-              onChange={handleFileInput}
-              accept=".txt,.csv,.xlsx,.xls,.docx"
-              className="hidden"
-            />
-            
-            <div className="w-16 h-16 bg-indigo-50 border border-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner relative">
-              {parsing ? (
-                <RefreshCw className="animate-spin" size={32} />
-              ) : (
-                <UploadCloud size={32} />
-              )}
+            <UploadCloud size={16} />
+            <span>Subir archivo</span>
+          </button>
+          
+          <button
+            type="button"
+            onClick={() => setActiveTab("pasted")}
+            className={`pb-3 px-4 text-xs sm:text-sm font-black transition-all cursor-pointer border-b-2 flex items-center gap-2 ${
+              activeTab === "pasted"
+                ? "border-indigo-600 text-indigo-700 font-extrabold text-slate-900"
+                : "border-transparent text-slate-450 hover:text-slate-600 font-bold"
+            }`}
+            id="tab-paste-text"
+          >
+            <FileText size={16} />
+            <span>Pegar texto</span>
+          </button>
+        </div>
+      )}
+
+      {/* 1. UPLOAD DECK OR PASTE TEXT CONTAINER */}
+      {!file && questions.length === 0 && !parsing && (
+        activeTab === "file" ? (
+          <div className="space-y-6 animate-fade-in" id="upload-deck">
+            {/* Visual Guide Header & Template Download Options */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4 text-left shadow-sm" id="visual-guide-section">
+              <h3 className="text-sm font-black uppercase tracking-wider text-indigo-700 flex items-center gap-1.5 font-sans">
+                <HelpCircle size={18} />
+                <span>¿Cómo preparar tus reactivos?</span>
+              </h3>
+              
+              <ul className="space-y-2.5 text-xs font-semibold text-slate-650 list-disc list-inside leading-relaxed font-sans">
+                <li>Usa una pregunta por fila en Excel o CSV.</li>
+                <li>Marca la respuesta correcta únicamente con la letra <strong className="text-indigo-600 font-bold">A, B, C o D</strong>.</li>
+                <li>Si dejas el campo de tiempo vacío, se usará el valor predeterminado de <strong className="text-slate-900 font-bold">30 segundos</strong>.</li>
+                <li>Si dejas el campo de puntos vacío, se acumularán <strong className="text-slate-950 font-bold">1000 puntos</strong> estándar.</li>
+                <li>El tema ingresado ayuda a categorizar tus reactivos y generar estadísticas de aprendizaje después.</li>
+              </ul>
+              
+              <div className="pt-3.5 border-t border-slate-200 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
+                <button 
+                  onClick={() => setShowTemplateMenu(!showTemplateMenu)}
+                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-sans font-bold text-xs px-4.5 py-2.5 rounded-xl shadow-md transition-all cursor-pointer"
+                  id="btn-download-templates-master"
+                >
+                  <FileSpreadsheet size={15} />
+                  <span>Descargar plantillas de ejemplo</span>
+                </button>
+                
+                {showTemplateMenu && (
+                  <div className="flex flex-wrap gap-2 animate-fade-in" id="templates-download-menu">
+                    <button 
+                      onClick={downloadXLSXTemplate}
+                      className="flex items-center gap-1.5 bg-white border border-slate-250 hover:border-emerald-500 hover:text-emerald-700 font-sans font-bold text-xs px-3 py-2 rounded-lg shadow-sm transition-all cursor-pointer"
+                    >
+                      <FileSpreadsheet size={14} className="text-emerald-600" />
+                      <span>Excel (.xlsx)</span>
+                    </button>
+                    <button 
+                      onClick={downloadCSVTemplate}
+                      className="flex items-center gap-1.5 bg-white border border-slate-250 hover:border-teal-500 hover:text-teal-700 font-sans font-bold text-xs px-3 py-2 rounded-lg shadow-sm transition-all cursor-pointer"
+                    >
+                      <FileSpreadsheet size={14} className="text-teal-600" />
+                      <span>Ejemplo CSV (.csv)</span>
+                    </button>
+                    <button 
+                      onClick={downloadTXTTemplate}
+                      className="flex items-center gap-1.5 bg-white border border-slate-250 hover:border-indigo-500 hover:text-indigo-700 font-sans font-bold text-xs px-3 py-2 rounded-lg shadow-sm transition-all cursor-pointer"
+                    >
+                      <FileText size={14} className="text-indigo-600" />
+                      <span>Plantilla TXT (.txt)</span>
+                    </button>
+                  </div>
+                )}
+
+                {!showTemplateMenu && (
+                  <span className="text-[11px] text-slate-400 font-medium font-sans">Soporta archivos TXT, CSV, Excel (XLSX) y Word (DOCX)</span>
+                )}
+              </div>
             </div>
 
-            <div className="space-y-1">
-              <p className="text-sm font-extrabold text-slate-800">
-                {parsing ? "Analizando reactivos..." : "Arrastra tu archivo aquí o haz clic para buscar"}
-              </p>
-              <p className="text-xs text-slate-400 font-sans">
-                Acepta .TXT, .CSV, .XLSX, y .DOCX (Límite 5 MB)
-              </p>
-            </div>
-          </div>
+            <div
+              onDragEnter={handleDrag}
+              onDragOver={handleDrag}
+              onDragLeave={handleDrag}
+              onDrop={handleDrop}
+              className={`cursor-pointer rounded-2xl border-2 border-dashed p-10 text-center transition-all flex flex-col items-center justify-center gap-4 ${
+                dragActive 
+                  ? "border-indigo-500 bg-indigo-50/50" 
+                  : "border-slate-300 hover:border-indigo-400 bg-white"
+              }`}
+              id="drag-and-drop-deck"
+              onClick={() => document.getElementById("file-loader-input")?.click()}
+            >
+              <input
+                id="file-loader-input"
+                type="file"
+                onChange={handleFileInput}
+                accept=".txt,.csv,.xlsx,.xls,.docx"
+                className="hidden"
+              />
+              
+              <div className="w-16 h-16 bg-indigo-50 border border-indigo-100 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner relative">
+                {parsing ? (
+                  <RefreshCw className="animate-spin" size={32} />
+                ) : (
+                  <UploadCloud size={32} />
+                )}
+              </div>
 
-          {/* Quick Format Reference Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-            <div className="border border-slate-200 bg-white p-5 rounded-2xl space-y-3 shadow-sm">
-              <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full font-bold uppercase font-mono">Formato TXT / DOCX Directo</span>
-              <pre className="text-[10.5px] text-slate-600 font-mono bg-slate-50 p-2.5 rounded-lg border border-slate-150 overflow-x-auto select-all leading-normal">
-{`¿Cuál es la fórmula del agua?
+              <div className="space-y-1">
+                <p className="text-sm font-extrabold text-slate-800">
+                  {parsing ? "Analizando reactivos..." : "Arrastra tu archivo aquí o haz clic para buscar"}
+                </p>
+                <p className="text-xs text-slate-400 font-sans">
+                  Acepta .TXT, .CSV, .XLSX, y .DOCX (Límite 5 MB)
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Format Reference Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+              <div className="border border-slate-200 bg-white p-5 rounded-2xl space-y-3 shadow-sm">
+                <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2.5 py-0.5 rounded-full font-bold uppercase font-mono">Formato TXT / DOCX Directo</span>
+                <pre className="text-[10.5px] text-slate-600 font-mono bg-slate-50 p-2.5 rounded-lg border border-slate-150 overflow-x-auto select-all leading-normal">
+  {`¿Cuál es la fórmula del agua?
 A) CO2
 B) H2O
 C) NaCl
 D) O2
 Respuesta: B`}
-              </pre>
-            </div>
+                </pre>
+              </div>
 
-            <div className="border border-slate-200 bg-white p-5 rounded-2xl space-y-3 shadow-sm">
-              <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded-full font-bold uppercase font-mono">Formato Excel XLSX / CSV</span>
-              <p className="text-xs text-slate-500 font-medium leading-relaxed font-sans">
-                La primera fila debe contener nombres de columnas o use la estructura de 9 columnas en este orden secuencial:
-              </p>
-              <p className="text-[11px] font-bold font-mono text-slate-700 bg-slate-50 p-2 rounded-lg border border-slate-150 tracking-tight">
-                pregunta, opcion_a, opcion_b, opcion_c, opcion_d, respuesta, tiempo, puntos, tema
-              </p>
+              <div className="border border-slate-200 bg-white p-5 rounded-2xl space-y-3 shadow-sm">
+                <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded-full font-bold uppercase font-mono">Formato Excel XLSX / CSV</span>
+                <p className="text-xs text-slate-500 font-medium leading-relaxed font-sans">
+                  La primera fila debe contener nombres de columnas o use la estructura de 9 columnas en este orden secuencial:
+                </p>
+                <p className="text-[11px] font-bold font-mono text-slate-700 bg-slate-50 p-2 rounded-lg border border-slate-150 tracking-tight">
+                  pregunta, opcion_a, opcion_b, opcion_c, opcion_d, respuesta, tiempo, puntos, tema
+                </p>
+              </div>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-6 animate-fade-in animate-duration-300" id="paste-text-section">
+            <div className="text-left space-y-1">
+              <h3 className="text-sm font-black uppercase tracking-wider text-indigo-700 flex items-center gap-1.5 font-sans">
+                <FileText size={18} />
+                <span>Pega aquí tus reactivos</span>
+              </h3>
+              <p className="text-xs text-slate-500 font-semibold font-sans">
+                Copia y pega preguntas directamente desde ChatGPT, Word, PDF, Google Docs o cualquier texto. El sistema estructurará el cuestionario automáticamente.
+              </p>
+            </div>
+
+            <div className="relative">
+              <textarea
+                value={pastedText}
+                onChange={(e) => setPastedText(e.target.value)}
+                placeholder="Pega tu texto aquí...&#10;&#10;Ejemplo completo:&#10;Pregunta:&#10;¿Cuál es la fórmula del agua?&#10;A) CO2&#10;B) H2O&#10;C) NaCl&#10;D) O2&#10;Respuesta: B&#10;Tiempo: 30&#10;Puntos: 1000&#10;Tema: Química&#10;&#10;O formato simplificado:&#10;¿Cuál es la fórmula del agua?&#10;A) CO2&#10;B) H2O&#10;C) NaCl&#10;D) O2&#10;Respuesta: B"
+                className="w-full min-h-[300px] bg-slate-50 border border-slate-350 focus:border-indigo-500 focus:bg-white rounded-2xl p-5 text-xs font-mono font-semibold text-slate-850 outline-none transition-all placeholder:text-slate-400"
+                maxLength={500000}
+                id="textarea-pasted-reactivos"
+              />
+              
+              <div className="absolute bottom-4 right-4 bg-slate-900/80 backdrop-blur-xs text-[10px] font-bold text-slate-200 font-mono px-2.5 py-1 rounded-md border border-slate-700/50">
+                {pastedText.length.toLocaleString()} caracteres
+              </div>
+            </div>
+
+            {/* Micro layout for quick triggers */}
+            <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-slate-200">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleLoadSample}
+                  className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border border-slate-200"
+                  id="btn-load-pasted-sample"
+                >
+                  <Sparkles size={13} className="text-amber-500 fill-amber-500" />
+                  <span>Cargar ejemplo</span>
+                </button>
+                
+                <button
+                  type="button"
+                  onClick={handleClearPastedText}
+                  disabled={!pastedText}
+                  className="px-3.5 py-2 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-600 disabled:opacity-40 text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border border-slate-200"
+                  id="btn-clear-pasted-text"
+                >
+                  <Trash2 size={13} />
+                  <span>Limpiar texto</span>
+                </button>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={handleAnalyzePastedText}
+                  disabled={parsing || !pastedText.trim()}
+                  className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white text-xs font-extrabold rounded-xl shadow-md hover:shadow-lg transition-all flex items-center gap-1.5 cursor-pointer"
+                  id="btn-analyze-pasted-text"
+                >
+                  {parsing ? (
+                    <RefreshCw size={13} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={13} />
+                  )}
+                  <span>Analizar texto</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )
       )}
 
       {/* 2. PROGRESS / ANALYZING STATE */}
-      {file && parsing && (
+      {parsing && (
         <div className="py-20 text-center space-y-4" id="processing-loader">
           <RefreshCw className="animate-spin text-indigo-600 mx-auto" size={36} />
           <div className="space-y-1">
@@ -847,22 +1037,26 @@ Respuesta: B`}
       )}
 
       {/* 3. PREVIEW & MANUALLY EDIT SCREEN */}
-      {file && !parsing && (
+      {(file || questions.length > 0) && !parsing && (
         <div className="space-y-8" id="preview-and-configuration">
           
           {/* File header metrics bar */}
           <div className="bg-slate-900 text-white p-4 sm:p-5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg shadow-slate-950/20">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-slate-800 text-indigo-400 rounded-xl flex items-center justify-center shrink-0 border border-slate-700">
-                {file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv") ? (
+                {file && (file.name.endsWith(".xlsx") || file.name.endsWith(".xls") || file.name.endsWith(".csv")) ? (
                   <FileSpreadsheet size={20} />
                 ) : (
                   <FileText size={20} />
                 )}
               </div>
-              <div className="text-left font-sans">
-                <h4 className="text-xs font-black truncate max-w-[200px] sm:max-w-xs">{file.name}</h4>
-                <p className="text-[10px] text-slate-400 font-mono">{(file.size / 1024).toFixed(1)} KB • Lector Offline</p>
+              <div className="text-left font-sans flex-1 min-w-0">
+                <h4 className="text-xs font-black truncate max-w-[200px] sm:max-w-xs">
+                  {file ? file.name : "Reactivos Pegados Directamente"}
+                </h4>
+                <p className="text-[10px] text-slate-400 font-mono">
+                  {file ? `${(file.size / 1024).toFixed(1)} KB • Lector Offline` : `${pastedText.length.toLocaleString()} caracteres • Parser Inteligente`}
+                </p>
               </div>
             </div>
 

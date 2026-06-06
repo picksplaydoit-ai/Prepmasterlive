@@ -580,6 +580,189 @@ app.post("/api/parse-file", async (req, res) => {
   }
 });
 
+// Endpoint: Parse mass-imported questions from pasted text
+app.post("/api/parse-pasted-text", express.json({ limit: "15mb" }), async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (text === undefined || text === null) {
+      return res.status(400).json({ success: false, error: "Falta el parámetro 'text'." });
+    }
+
+    const sanitize = (val: any): string => {
+      if (val === undefined || val === null) return "";
+      return String(val).replace(/<[^>]*>/g, "").trim();
+    };
+
+    const questionsList = smartParsePastedText(text, sanitize);
+    return res.json({ success: true, questions: questionsList });
+  } catch (err: any) {
+    console.error("Error al interpretar texto pegado:", err);
+    return res.status(500).json({ success: false, error: err.message || "Error interno al interpretar el texto." });
+  }
+});
+
+// Smart parser for pasted teacher text with fallback and advanced matching
+function smartParsePastedText(text: string, sanitize: (val: any) => string): any[] {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n").map(l => l.trim());
+  const questions: any[] = [];
+  
+  let current: {
+    textLines: string[];
+    options: string[];
+    correctOptionRaw: string;
+    timeLimit?: number;
+    points?: number;
+    topic?: string;
+  } = { textLines: [], options: [], correctOptionRaw: "" };
+
+  const pushCurrent = () => {
+    const questionText = current.textLines.join(" ").trim();
+    const actualOptions = current.options.filter(o => o !== undefined && o !== null);
+    
+    // Ignore completely empty blocks
+    if (!questionText && actualOptions.length === 0) {
+      return;
+    }
+    
+    const errors: string[] = [];
+    if (!questionText) {
+      errors.push("Enunciado de pregunta vacío.");
+    }
+    
+    // Check options count
+    const nonAmpleOptions = actualOptions.map(o => o.trim()).filter(Boolean);
+    if (nonAmpleOptions.length < 2) {
+      errors.push("Debe ingresar al menos 2 opciones de respuesta.");
+    }
+
+    // Check duplicate options
+    const uniqueOptions = new Set(nonAmpleOptions.map(o => o.toLowerCase()));
+    if (uniqueOptions.size < nonAmpleOptions.length) {
+      errors.push("Se detectaron opciones de respuesta duplicadas.");
+    }
+    
+    let correctOptionIndex = -1;
+    const correctOptionRaw = current.correctOptionRaw.trim();
+    if (correctOptionRaw) {
+      if (/^[A-D]$/i.test(correctOptionRaw)) {
+        correctOptionIndex = correctOptionRaw.toUpperCase().charCodeAt(0) - 65;
+      } else {
+        const matchIdx = current.options.findIndex(o => o && o.toLowerCase() === correctOptionRaw.toLowerCase());
+        if (matchIdx !== -1) {
+          correctOptionIndex = matchIdx;
+        } else {
+          const parsedInt = parseInt(correctOptionRaw, 10);
+          if (!isNaN(parsedInt) && parsedInt >= 1 && parsedInt <= 4) {
+            correctOptionIndex = parsedInt - 1;
+          }
+        }
+      }
+    } else {
+      errors.push("Respuesta correcta inexistente.");
+    }
+    
+    if (correctOptionIndex === -1 || correctOptionIndex >= 4 || current.options[correctOptionIndex] === undefined || !current.options[correctOptionIndex].trim()) {
+      errors.push(`La respuesta correcta indicada (“${correctOptionRaw || 'ninguna'}”) no coincide con ninguna opción válida.`);
+    }
+
+    const finalOptions = ["", "", "", ""];
+    for (let i = 0; i < 4; i++) {
+      if (current.options[i] !== undefined) {
+        finalOptions[i] = current.options[i];
+      }
+    }
+
+    questions.push({
+      text: questionText,
+      options: finalOptions,
+      correctOption: correctOptionIndex,
+      timeLimit: current.timeLimit ?? 30,
+      points: current.points ?? 1000,
+      topic: current.topic ?? "General",
+      isValid: errors.length === 0,
+      error: errors.length > 0 ? errors.join(" ") : undefined
+    });
+
+    current = { textLines: [], options: [], correctOptionRaw: "" };
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) {
+      if (current.textLines.length > 0 && (current.options.length > 0 || current.correctOptionRaw)) {
+        pushCurrent();
+      }
+      continue;
+    }
+
+    const isExplicitPreguntaHeader = /^pregunta[\s.:-]+/i.test(line) || line.toLowerCase() === "pregunta:";
+    const numberedPrefixMatch = line.match(/^(\d+)[\s).:\]-]+(.*)$/);
+    const startsWithNumber = !!numberedPrefixMatch;
+    const hasOptionsOrAnswer = current.options.length > 0 || !!current.correctOptionRaw;
+    
+    if (isExplicitPreguntaHeader || (hasOptionsOrAnswer && startsWithNumber)) {
+      pushCurrent();
+      if (isExplicitPreguntaHeader) {
+        const payload = line.replace(/^pregunta[\s.:-]+/i, "").trim();
+        if (payload) {
+          current.textLines.push(sanitize(payload));
+        }
+        continue;
+      }
+    }
+
+    // Match option: A) CO2 or A. CO2
+    const optionMatch = line.match(/^\s*([A-Da-d])[\s).:\]-]+(.*)$/);
+    if (optionMatch) {
+      const letter = optionMatch[1].toUpperCase();
+      const optionVal = sanitize(optionMatch[2]);
+      const idx = letter.charCodeAt(0) - 65;
+      current.options[idx] = optionVal;
+      continue;
+    }
+
+    // Match metadata fields
+    const answerMatch = line.match(/^(?:Respuesta|Correcta|Ans|Answer|Respuesta correcta|Solución)[\s.:-]+(.*)$/i);
+    if (answerMatch) {
+      current.correctOptionRaw = sanitize(answerMatch[1]);
+      continue;
+    }
+
+    const timerMatch = line.match(/^(?:Tiempo|Time|Límite)[\s.:-]+(\d+)/i);
+    if (timerMatch) {
+      current.timeLimit = parseInt(timerMatch[1], 10);
+      continue;
+    }
+
+    const pointsMatch = line.match(/^(?:Puntos|Points|Valor)[\s.:-]+(\d+)/i);
+    if (pointsMatch) {
+      current.points = parseInt(pointsMatch[1], 10);
+      continue;
+    }
+
+    const topicMatch = line.match(/^(?:Tema|Topic|Category|Categoría|Materia|Eje)[\s.:-]+(.*)$/i);
+    if (topicMatch) {
+      current.topic = sanitize(topicMatch[1]);
+      continue;
+    }
+
+    // Accumulate question description text
+    if (current.options.length === 0 && !current.correctOptionRaw) {
+      let cleanLine = line;
+      if (startsWithNumber && numberedPrefixMatch) {
+        cleanLine = numberedPrefixMatch[2];
+      }
+      if (cleanLine) {
+        current.textLines.push(sanitize(cleanLine));
+      }
+    }
+  }
+
+  pushCurrent();
+  return questions;
+}
+
 // Helper for parsing word formats & text files
 function parseTextAndDocxQuestions(text: string, sanitize: (val: any) => string): any[] {
   const normalized = text.replace(/\r\n/g, "\n");
