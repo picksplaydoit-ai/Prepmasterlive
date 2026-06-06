@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { 
   Play, Plus, Edit3, Trash2, Users, QrCode, Clipboard, 
-  Trophy, Award, RefreshCw, BarChart2, CheckCircle, 
+  Trophy, Award, RefreshCw, BarChart2, CheckCircle, Zap,
   ChevronRight, VolumeX, Download, LogOut, ArrowRight, Clock, HelpCircle,
   Tv, ListPlus, FileSpreadsheet, TrendingDown, Calendar
 } from "lucide-react";
 import { socket } from "../lib/socket";
-import { Questionnaire, Player, GameSession, PlayerAnswersCount } from "../types";
+import { Questionnaire, Player, GameSession, PlayerAnswersCount, Team } from "../types";
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import { AvatarRenderer, getAvatarById } from "./AvatarCatalog";
@@ -55,6 +55,21 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
   // Leaderboard data
   const [leaderboard, setLeaderboard] = useState<Player[]>([]);
+
+  // Team states
+  const [activeGameMode, setActiveGameMode] = useState<'individual' | 'teams'>('individual');
+  const [activeTeams, setActiveTeams] = useState<Team[]>([]);
+  const [teamRankings, setTeamRankings] = useState<any[]>([]);
+  const [teamStats, setTeamStats] = useState<any | null>(null);
+
+  // Modal configuration states
+  const [hostingQuizId, setHostingQuizId] = useState<string | null>(null);
+  const [setupGameMode, setSetupGameMode] = useState<'individual' | 'teams'>('individual');
+  const [setupTeams, setSetupTeams] = useState<Team[]>([
+    { id: "team_agaves", name: "Agaves", icon: "🌱", color: "#10b981" },
+    { id: "team_mariachis", name: "Mariachis", icon: "🎺", color: "#f59e0b" },
+    { id: "team_tortas", name: "Tortas Ahogadas", icon: "🥖", color: "#f97316" }
+  ]);
 
   // Podium (Final stand)
   const [podium, setPodium] = useState<Player[]>([]);
@@ -151,6 +166,20 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
     const targetQuiz = quizzes.find(q => q.id === quizId);
     if (!targetQuiz) return;
 
+    setHostingQuizId(quizId);
+    setSetupGameMode("individual");
+    setSetupTeams([
+      { id: "team_agaves", name: "Agaves", icon: "🌱", color: "#10b981" },
+      { id: "team_mariachis", name: "Mariachis", icon: "🎺", color: "#f59e0b" },
+      { id: "team_tortas", name: "Tortas Ahogadas", icon: "🥖", color: "#f97316" }
+    ]);
+  };
+
+  const commitHostGame = () => {
+    if (!hostingQuizId) return;
+    const targetQuiz = quizzes.find(q => q.id === hostingQuizId);
+    if (!targetQuiz) return;
+
     setGameTitle(targetQuiz.title);
     setTotalQuestionsCount(targetQuiz.questions.length);
     setPlayersList([]);
@@ -159,17 +188,53 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
     setPodium([]);
     
     // Request server to construct game room session
-    socket.emit("host:create-session", { questionnaireId: quizId });
+    socket.emit("host:create-session", { 
+      questionnaireId: hostingQuizId,
+      gameMode: setupGameMode,
+      teams: setupGameMode === "teams" ? setupTeams : []
+    });
+
+    setHostingQuizId(null);
+  };
+
+  const handleAddSetupTeam = (preset?: { name: string; icon: string; color: string }) => {
+    if (setupTeams.length >= 8) return;
+    const newId = `setup_team_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const newTeam: Team = preset ? {
+      id: newId,
+      name: preset.name,
+      icon: preset.icon,
+      color: preset.color
+    } : {
+      id: newId,
+      name: `Equipo ${setupTeams.length + 1}`,
+      icon: "🤖",
+      color: "#4f46e5"
+    };
+    setSetupTeams([...setupTeams, newTeam]);
+  };
+
+  const handleUpdateSetupTeam = (id: string, updates: Partial<Team>) => {
+    setSetupTeams(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
+  };
+
+  const handleRemoveSetupTeam = (id: string) => {
+    if (setupTeams.length <= 2) return;
+    setSetupTeams(prev => prev.filter(t => t.id !== id));
   };
 
   // Socket listener setup
   useEffect(() => {
-    socket.on("session:created", (data: { pin: string; title: string; questionsCount: number; players: Player[] }) => {
+    socket.on("session:created", (data: { pin: string; title: string; questionsCount: number; players: Player[]; gameMode?: 'individual' | 'teams'; teams?: Team[] }) => {
       setActivePin(data.pin);
       setGameTitle(data.title);
       setTotalQuestionsCount(data.questionsCount);
       setGameStatus("lobby");
       setPlayersList(data.players || []);
+      setActiveGameMode(data.gameMode || "individual");
+      setActiveTeams(data.teams || []);
+      setTeamRankings([]);
+      setTeamStats(null);
     });
 
     socket.on("player:joined-list", (data: { players: Player[] }) => {
@@ -217,6 +282,19 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
     // Generic game state updates (lobby/reveals/leaderboards)
     socket.on("game:status-update", (data: any) => {
+      if (data.gameMode !== undefined) {
+        setActiveGameMode(data.gameMode);
+      }
+      if (data.teams !== undefined) {
+        setActiveTeams(data.teams);
+      }
+      if (data.teamRankings !== undefined) {
+        setTeamRankings(data.teamRankings);
+      }
+      if (data.teamStats !== undefined) {
+        setTeamStats(data.teamStats);
+      }
+
       if (data.status === "countdown") {
         setGameStatus("countdown");
         setCountdownTimer(data.timer);
@@ -306,10 +384,15 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
         const accuracyPct = studentLogs.length > 0 ? Math.round((aciertos / studentLogs.length) * 100) : 0;
 
+        const teamName = p.teamId && gameResultsData.teams
+          ? (gameResultsData.teams.find((t: any) => t.id === p.teamId)?.name || "")
+          : "Individual";
+
         return {
           "Lugar": idx + 1,
           "Nombre del alumno": p.name,
           "Avatar": p.avatarId ? getAvatarById(p.avatarId).name : "Estándar",
+          "Equipo": teamName,
           "Puntaje total": p.score,
           "Aciertos": aciertos,
           "Errores": errores,
@@ -346,12 +429,17 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
             }
           }
 
+          const teamName = p.teamId && gameResultsData.teams
+            ? (gameResultsData.teams.find((t: any) => t.id === p.teamId)?.name || "")
+            : "Individual";
+
           sheet2Data.push({
             "Número de pregunta": qIdx + 1,
             "Pregunta": q.text,
             "Tema": q.topic || "General",
             "Respuesta correcta": correctLetter,
             "Alumno": p.name,
+            "Equipo": teamName,
             "Respuesta del alumno": resAlumno,
             "Correcta / Incorrecta / Sin responder": statusStr,
             "Puntos obtenidos": puntos,
@@ -935,48 +1023,108 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
           {/* 5. LEADERBOARD VIEW */}
           {isLeaderboard && (
-            <div className="flex-1 flex flex-col justify-between space-y-6" id="leaderboard-state-canvas">
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm max-w-lg mx-auto w-full space-y-4">
+            <div className="flex-1 flex flex-col justify-between space-y-6 animate-fade-in" id="leaderboard-state-canvas">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-4xl mx-auto">
                 
-                <div className="text-center space-y-1 pb-2 border-b border-slate-100">
-                  <Trophy className="text-amber-500 mx-auto" size={30} />
-                  <h3 className="text-lg font-bold text-slate-900 font-sans">Tabla de Posiciones del Aula</h3>
-                  <p className="text-xs text-slate-400">Puntaje acumulado general de los participantes</p>
+                {/* Individual Leaderboard */}
+                <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+                  <div className="text-center space-y-1 pb-2 border-b border-slate-100">
+                    <Trophy className="text-amber-500 mx-auto" size={30} />
+                    <h3 className="text-lg font-bold text-slate-900 font-sans">Tabla de Posiciones</h3>
+                    <p className="text-xs text-slate-400">Puntaje acumulado general de los participantes</p>
+                  </div>
+
+                  <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                    {leaderboard.length === 0 ? (
+                      <div className="text-slate-400 text-center py-6 text-xs font-sans">Sin puntuaciones registradas aún.</div>
+                    ) : (
+                      leaderboard.slice(0, 5).map((p, idx) => {
+                        const teamLabel = p.teamId && activeTeams.find(t => t.id === p.teamId)
+                          ? ` [${activeTeams.find(t => t.id === p.teamId)?.icon} ${activeTeams.find(t => t.id === p.teamId)?.name}]`
+                          : "";
+                        return (
+                          <div 
+                            key={p.id}
+                            className="flex justify-between items-center p-2.5 bg-slate-50 rounded-lg border border-slate-150"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className={`w-6 h-6 rounded-full flex items-center justify-center font-mono font-bold text-[10px] ${
+                                idx === 0 ? "bg-amber-400 text-slate-900" :
+                                idx === 1 ? "bg-slate-300 text-slate-900" :
+                                idx === 2 ? "bg-amber-700 text-white" : "bg-slate-200 text-slate-600"
+                              }`}>
+                                {idx + 1}
+                              </span>
+                              <AvatarRenderer id={p.avatarId} size={24} className="shrink-0 bg-white p-0.5 rounded-full border border-slate-200 shadow-xs" />
+                              <div>
+                                <span className="text-xs font-extrabold text-slate-800">{p.name}</span>
+                                {teamLabel && <span className="text-[9px] font-bold text-indigo-600 font-sans block leading-none">{teamLabel}</span>}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {p.streak > 1 && (
+                                <span className="bg-orange-50 text-orange-600 border border-orange-200 text-[9px] font-mono px-2 py-0.5 rounded-full uppercase font-extrabold">
+                                  🔥 racha {p.streak}
+                                </span>
+                              )}
+                              <span className="text-xs font-mono font-extrabold text-indigo-600">{p.score} pts</span>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
 
-                <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
-                  {leaderboard.length === 0 ? (
-                    <div className="text-slate-400 text-center py-6 text-xs">Sin puntuaciones registradas aún.</div>
-                  ) : (
-                    leaderboard.slice(0, 5).map((p, idx) => (
-                      <div 
-                        key={p.id}
-                        className="flex justify-between items-center p-2.5 bg-slate-50 rounded-lg border border-slate-150"
-                      >
-                        <div className="flex items-center gap-3">
-                          <span className={`w-6 h-6 rounded-full flex items-center justify-center font-mono font-bold text-[10px] ${
-                            idx === 0 ? "bg-amber-400 text-slate-900" :
-                            idx === 1 ? "bg-slate-300 text-slate-900" :
-                            idx === 2 ? "bg-amber-700 text-white" : "bg-slate-200 text-slate-600"
-                          }`}>
-                            {idx + 1}
-                          </span>
-                          <AvatarRenderer id={p.avatarId} size={24} className="shrink-0 bg-white p-0.5 rounded-full border border-slate-200 shadow-xs" />
-                          <span className="text-xs font-extrabold text-slate-800">{p.name}</span>
-                        </div>
+                {/* Team Leaderboard (Conditional) */}
+                {activeGameMode === "teams" ? (
+                  <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+                    <div className="text-center space-y-1 pb-2 border-b border-slate-100">
+                      <Users className="text-indigo-600 mx-auto" size={30} />
+                      <h3 className="text-lg font-bold text-slate-900 font-sans">Tabla de Equipos</h3>
+                      <p className="text-xs text-slate-400">Puntaje combinado acumulado por equipos</p>
+                    </div>
 
-                        <div className="flex items-center gap-2">
-                          {p.streak > 1 && (
-                            <span className="bg-orange-50 text-orange-600 border border-orange-200 text-[9px] font-mono px-2 py-0.5 rounded-full uppercase font-extrabold">
-                              🔥 racha {p.streak}
-                            </span>
-                          )}
-                          <span className="text-xs font-mono font-extrabold text-indigo-600">{p.score} pts</span>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
+                    <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                      {teamRankings.length === 0 ? (
+                        <div className="text-slate-400 text-center py-6 text-xs font-sans">Cargando puntuaciones de equipos...</div>
+                      ) : (
+                        teamRankings.map((t, idx) => (
+                          <div 
+                            key={t.id}
+                            className="flex justify-between items-center p-2.5 bg-slate-50 rounded-lg border border-slate-150"
+                            style={{ borderLeftWidth: "4px", borderLeftColor: t.color }}
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className={`w-6 h-6 rounded-full flex items-center justify-center font-mono font-bold text-[10px] ${
+                                idx === 0 ? "bg-amber-400 text-slate-900" :
+                                idx === 1 ? "bg-slate-300 text-slate-900" :
+                                idx === 2 ? "bg-amber-700 text-white" : "bg-slate-200 text-slate-600"
+                              }`}>
+                                {idx + 1}
+                              </span>
+                              <span className="text-lg leading-none">{t.icon}</span>
+                              <div>
+                                <span className="text-xs font-extrabold text-slate-800">{t.name}</span>
+                                <span className="text-[9px] font-semibold text-slate-400 block">{t.playerCount} integrantes</span>
+                              </div>
+                            </div>
+
+                            <span className="text-xs font-mono font-extrabold text-indigo-600">{t.score} pts</span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-white/40 border border-dashed border-slate-200 rounded-2xl p-6 flex flex-col justify-center items-center text-center space-y-2">
+                    <Users className="text-slate-300" size={32} />
+                    <h4 className="text-sm font-bold text-slate-500 font-sans">Modo Individual Activo</h4>
+                    <p className="text-xs text-slate-400 max-w-xs font-sans">Esta partida se juega de manera individual. No hay puntajes de equipos.</p>
+                  </div>
+                )}
+
               </div>
             </div>
           )}
@@ -991,47 +1139,107 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
               </div>
 
               {/* Triple Podium Castle tower visuals */}
-              <div className="flex items-end justify-center gap-4 sm:gap-6 pt-2 pb-2 max-w-sm mx-auto w-full min-h-[140px]" id="podium-castle">
-                
-                {/* 2nd Place */}
-                {podium[1] && (
-                  <div className="flex flex-col items-center flex-1 shrink-0">
-                    <AvatarRenderer id={podium[1].avatarId || "cult_mariachi"} size={44} className="mb-1 rounded-full shadow border-2 border-slate-300" />
-                    <div className="text-center mb-1 max-w-[85px] truncate">
-                      <span className="text-xs font-bold text-slate-700 block truncate">{podium[1].name}</span>
-                      <span className="text-[10px] text-slate-400 font-mono">{podium[1].score} pts</span>
-                    </div>
-                    <div className="w-full bg-slate-200 border-t-2 border-slate-300 rounded-t-xl h-16 flex items-center justify-center">
-                      <span className="text-lg font-black text-slate-500">2</span>
-                    </div>
-                  </div>
-                )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start pt-2 pb-2 max-w-4xl mx-auto w-full">
+                {/* Individual Podium */}
+                <div className="flex flex-col items-center space-y-3">
+                  {activeGameMode === "teams" && (
+                    <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Podio Individual</h4>
+                  )}
+                  <div className="flex items-end justify-center gap-4 sm:gap-6 max-w-xs mx-auto w-full min-h-[140px]" id="podium-castle">
+                    
+                    {/* 2nd Place */}
+                    {podium[1] && (
+                      <div className="flex flex-col items-center flex-1 shrink-0">
+                        <AvatarRenderer id={podium[1].avatarId || "cult_mariachi"} size={44} className="mb-1 rounded-full shadow border-2 border-slate-300 bg-white" />
+                        <div className="text-center mb-1 max-w-[85px] truncate">
+                          <span className="text-xs font-bold text-slate-700 block truncate leading-none">{podium[1].name}</span>
+                          <span className="text-[10px] text-slate-400 font-mono font-bold">{podium[1].score} pts</span>
+                        </div>
+                        <div className="w-full bg-slate-200 border-t-2 border-slate-300 rounded-t-xl h-16 flex items-center justify-center">
+                          <span className="text-lg font-black text-slate-500">2</span>
+                        </div>
+                      </div>
+                    )}
 
-                {/* 1st Place */}
-                {podium[0] && (
-                  <div className="flex flex-col items-center flex-1 shrink-0 scale-105">
-                    <span className="text-amber-500 text-sm mb-1">👑</span>
-                    <AvatarRenderer id={podium[0].avatarId || "cult_mariachi"} size={52} className="mb-1 rounded-full shadow-md border-2 border-amber-400" />
-                    <div className="text-center mb-1 max-w-[95px] truncate">
-                      <span className="text-xs font-black text-indigo-700 block truncate">{podium[0].name}</span>
-                      <span className="text-[10px] text-amber-600 font-mono font-bold">{podium[0].score} pts</span>
-                    </div>
-                    <div className="w-full bg-amber-50/60 border-t-2 border-amber-400 rounded-t-xl h-24 flex items-center justify-center relative shadow-sm">
-                      <span className="text-xl font-black text-amber-500">1</span>
-                    </div>
-                  </div>
-                )}
+                    {/* 1st Place */}
+                    {podium[0] && (
+                      <div className="flex flex-col items-center flex-1 shrink-0 scale-105">
+                        <span className="text-amber-500 text-sm mb-1 leading-none">👑</span>
+                        <AvatarRenderer id={podium[0].avatarId || "cult_mariachi"} size={52} className="mb-1 rounded-full shadow-md border-2 border-amber-400 bg-white" />
+                        <div className="text-center mb-1 max-w-[95px] truncate">
+                          <span className="text-xs font-black text-indigo-700 block truncate leading-none">{podium[0].name}</span>
+                          <span className="text-[10px] text-amber-600 font-mono font-bold">{podium[0].score} pts</span>
+                        </div>
+                        <div className="w-full bg-amber-50/60 border-t-2 border-amber-400 rounded-t-xl h-24 flex items-center justify-center relative shadow-sm">
+                          <span className="text-xl font-black text-amber-500">1</span>
+                        </div>
+                      </div>
+                    )}
 
-                {/* 3rd Place */}
-                {podium[2] && (
-                  <div className="flex flex-col items-center flex-1 shrink-0">
-                    <AvatarRenderer id={podium[2].avatarId || "cult_mariachi"} size={40} className="mb-1 rounded-full shadow border-2 border-slate-300" />
-                    <div className="text-center mb-1 max-w-[85px] truncate">
-                      <span className="text-xs font-bold text-slate-700 block truncate">{podium[2].name}</span>
-                      <span className="text-[10px] text-slate-400 font-mono">{podium[2].score} pts</span>
-                    </div>
-                    <div className="w-full bg-slate-250 border-t-2 border-slate-355 rounded-t-xl h-12 flex items-center justify-center">
-                      <span className="text-base font-bold text-slate-400">3</span>
+                    {/* 3rd Place */}
+                    {podium[2] && (
+                      <div className="flex flex-col items-center flex-1 shrink-0">
+                        <AvatarRenderer id={podium[2].avatarId || "cult_mariachi"} size={40} className="mb-1 rounded-full shadow border-2 border-slate-300 bg-white" />
+                        <div className="text-center mb-1 max-w-[85px] truncate">
+                          <span className="text-xs font-bold text-slate-700 block truncate leading-none">{podium[2].name}</span>
+                          <span className="text-[10px] text-slate-400 font-mono font-bold">{podium[2].score} pts</span>
+                        </div>
+                        <div className="w-full bg-slate-250 border-t-2 border-slate-355 rounded-t-xl h-12 flex items-center justify-center">
+                          <span className="text-base font-bold text-slate-400">3</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Team Podium */}
+                {activeGameMode === "teams" && teamRankings && (
+                  <div className="flex flex-col items-center space-y-3">
+                    <h4 className="text-[10px] font-black uppercase tracking-widest text-indigo-650">Podio de Equipos</h4>
+                    <div className="flex items-end justify-center gap-4 sm:gap-6 max-w-xs mx-auto w-full min-h-[140px]" id="podium-teams-castle">
+                      
+                      {/* 2nd Place Team */}
+                      {teamRankings[1] && (
+                        <div className="flex flex-col items-center flex-1 shrink-0">
+                          <span className="text-2xl leading-none mb-1">{teamRankings[1].icon}</span>
+                          <div className="text-center mb-1 max-w-[85px] truncate">
+                            <span className="text-xs font-bold text-slate-700 block truncate leading-none">{teamRankings[1].name}</span>
+                            <span className="text-[10px] text-slate-400 font-mono font-bold">{teamRankings[1].score} pts</span>
+                          </div>
+                          <div className="w-full bg-slate-200 border-t-2 border-slate-300 rounded-t-xl h-16 flex items-center justify-center">
+                            <span className="text-sm font-black text-slate-500">🥈</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 1st Place Team */}
+                      {teamRankings[0] && (
+                        <div className="flex flex-col items-center flex-1 shrink-0 scale-105">
+                          <span className="text-amber-500 text-sm mb-1 leading-none">👑</span>
+                          <span className="text-3xl leading-none mb-1">{teamRankings[0].icon}</span>
+                          <div className="text-center mb-1 max-w-[95px] truncate">
+                            <span className="text-xs font-black text-indigo-700 block truncate leading-none">{teamRankings[0].name}</span>
+                            <span className="text-[10px] text-amber-600 font-mono font-bold">{teamRankings[0].score} pts</span>
+                          </div>
+                          <div className="w-full bg-amber-50/60 border-t-2 border-amber-400 rounded-t-xl h-24 flex items-center justify-center relative shadow-sm">
+                            <span className="text-sm font-black text-indigo-500">🥇</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 3rd Place Team */}
+                      {teamRankings[2] && (
+                        <div className="flex flex-col items-center flex-1 shrink-0">
+                          <span className="text-2xl leading-none mb-1">{teamRankings[2].icon}</span>
+                          <div className="text-center mb-1 max-w-[85px] truncate">
+                            <span className="text-xs font-bold text-slate-700 block truncate leading-none">{teamRankings[2].name}</span>
+                            <span className="text-[10px] text-slate-400 font-mono font-bold">{teamRankings[2].score} pts</span>
+                          </div>
+                          <div className="w-full bg-slate-250 border-t-2 border-slate-355 rounded-t-xl h-12 flex items-center justify-center">
+                            <span className="text-sm font-bold text-slate-400">🥉</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1119,6 +1327,71 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
                       </div>
 
                     </div>
+
+                    {/* CARTAS DE ESTADÍSTICAS POR EQUIPO (Conditional) */}
+                    {activeGameMode === "teams" && teamStats && (
+                      <div className="border-t border-slate-200 pt-4 mt-4 space-y-3">
+                        <h4 className="text-[10px] font-black uppercase tracking-widest text-indigo-600 font-sans flex items-center gap-1">
+                          <Users size={11} />
+                          <span>Métricas y Logros por Equipos</span>
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3" id="team-stats-cards">
+                          
+                          {/* CARD 5: Equipo con más puntos */}
+                          <div className="bg-white p-3 rounded-xl border border-slate-150 shadow-sm flex flex-col justify-between">
+                            <div className="flex items-center gap-1 text-amber-500 mb-1">
+                              <Trophy size={13} />
+                              <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Equipo Más Puntos</span>
+                            </div>
+                            <div>
+                              <span className="text-xs font-black text-slate-800 flex items-center gap-1">
+                                <span className="text-sm">{teamStats.maxPointsTeam?.icon}</span>
+                                <span className="truncate">{teamStats.maxPointsTeam?.name || "N/A"}</span>
+                              </span>
+                              <span className="text-[9px] text-amber-700 block font-mono font-bold mt-0.5">
+                                {teamStats.maxPointsTeam?.score ?? 0} pts totales
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* CARD 6: Equipo más rápido */}
+                          <div className="bg-white p-3 rounded-xl border border-slate-150 shadow-sm flex flex-col justify-between">
+                            <div className="flex items-center gap-1 text-indigo-500 mb-1">
+                              <Zap size={13} />
+                              <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Equipo Más Rápido</span>
+                            </div>
+                            <div>
+                              <span className="text-xs font-black text-slate-800 flex items-center gap-1">
+                                <span className="text-sm">{teamStats.fastestTeam?.icon}</span>
+                                <span className="truncate">{teamStats.fastestTeam?.name || "N/A"}</span>
+                              </span>
+                              <span className="text-[9px] text-slate-500 block font-mono mt-0.5">
+                                {teamStats.fastestTeam?.avgTimeMs ? `${(teamStats.fastestTeam.avgTimeMs / 1000).toFixed(2)} s prom.` : "Sistemas N/A"}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* CARD 7: Equipo con mejor puntería */}
+                          <div className="bg-white p-3 rounded-xl border border-slate-150 shadow-sm flex flex-col justify-between">
+                            <div className="flex items-center gap-1 text-emerald-500 mb-1">
+                              <CheckCircle size={13} />
+                              <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Mejor Puntería %</span>
+                            </div>
+                            <div>
+                              <span className="text-xs font-black text-slate-800 flex items-center gap-1">
+                                <span className="text-sm">{teamStats.bestAccuracyTeam?.icon}</span>
+                                <span className="truncate">{teamStats.bestAccuracyTeam?.name || "N/A"}</span>
+                              </span>
+                              <span className="text-[9px] text-emerald-600 block font-mono font-bold mt-0.5">
+                                {teamStats.bestAccuracyTeam?.accuracy ? `${Math.round(teamStats.bestAccuracyTeam.accuracy)}% efectividad` : "0% efectividad"}
+                              </span>
+                            </div>
+                          </div>
+
+                        </div>
+                      </div>
+                    )}
+
                   </div>
                 )}
               </div>
@@ -1420,6 +1693,199 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
           </div>
         </div>
       )}
+
+      {/* ----------------- GAME CONFIGURATION MODAL (Setup Game Mode & Teams) ----------------- */}
+      {hostingQuizId && (
+        <div className="fixed inset-0 bg-slate-950/75 backdrop-blur-xs z-50 flex items-center justify-center p-4 overflow-y-auto" id="game-setup-modal">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col animate-scale-up">
+            
+            {/* Header */}
+            <div className="p-6 border-b border-slate-100 bg-slate-50 shrink-0">
+              <h3 className="text-xl font-extrabold text-slate-900 font-sans">Configuración de Partida</h3>
+              <p className="text-xs text-slate-500 mt-1 font-medium">Elige el modo en que participarán los alumnos en esta partida colaborativa.</p>
+            </div>
+
+            {/* Content Core Body */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-6">
+              
+              {/* Selector de Modo */}
+              <div className="space-y-3">
+                <label className="text-xs font-black uppercase tracking-widest text-slate-400 block font-sans">Modo de Juego</label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  
+                  {/* Modo Individual Card */}
+                  <div 
+                    onClick={() => setSetupGameMode("individual")}
+                    className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex gap-4 items-center ${
+                      setupGameMode === "individual" 
+                        ? "border-indigo-600 bg-indigo-50/50 shadow-sm" 
+                        : "border-slate-200 hover:border-slate-350 bg-white"
+                    }`}
+                  >
+                    <div className="w-12 h-12 rounded-xl bg-orange-100 flex items-center justify-center text-orange-600 shrink-0">
+                      <Trophy size={20} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-black text-slate-800">Modo Individual</h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">Cada alumno compite por su propia cuenta para lograr puntaje individual.</p>
+                    </div>
+                  </div>
+
+                  {/* Modo Equipos Card */}
+                  <div 
+                    onClick={() => setSetupGameMode("teams")}
+                    className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex gap-4 items-center ${
+                      setupGameMode === "teams" 
+                        ? "border-indigo-600 bg-indigo-50/50 shadow-sm" 
+                        : "border-slate-200 hover:border-slate-355 bg-white"
+                    }`}
+                  >
+                    <div className="w-12 h-12 rounded-xl bg-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
+                      <Users size={20} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-black text-slate-800">Modo por Equipos</h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5 leading-snug">Los alumnos se unen a equipos. Los puntajes se acumulan por escuadras cooperativas.</p>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* Seccion de Configuracion de Equipos */}
+              {setupGameMode === "teams" && (
+                <div className="space-y-4 animate-fade-in pt-4 border-t border-slate-100">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h4 className="text-xs font-black uppercase tracking-widest text-slate-400 block font-sans">Configura tus Equipos ({setupTeams.length}/8)</h4>
+                      <p className="text-[10px] text-slate-500 font-medium">Crea entre 2 y 8 equipos para la partida colaborativa.</p>
+                    </div>
+
+                    <button
+                      onClick={() => handleAddSetupTeam()}
+                      disabled={setupTeams.length >= 8}
+                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white rounded-lg text-xs font-bold leading-none cursor-pointer"
+                    >
+                      + Agregar Equipo
+                    </button>
+                  </div>
+
+                  {/* List of current Teams */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[220px] overflow-y-auto pr-1">
+                    {setupTeams.map((team) => (
+                      <div 
+                        key={team.id}
+                        className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2.5 shadow-xs relative group"
+                      >
+                        {/* Drag and Color representation */}
+                        <div 
+                          className="w-3.5 h-3.5 rounded-full shrink-0 border border-slate-300"
+                          style={{ backgroundColor: team.color }}
+                        />
+
+                        {/* Icon field */}
+                        <input 
+                          type="text" 
+                          maxLength={2}
+                          value={team.icon}
+                          onChange={(e) => handleUpdateSetupTeam(team.id, { icon: e.target.value })}
+                          className="w-8 h-8 rounded-lg bg-white border border-slate-200 text-center text-sm font-bold shadow-xs focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                          title="Ícono / Emoji"
+                        />
+
+                        {/* Name field */}
+                        <input 
+                          type="text" 
+                          maxLength={25}
+                          value={team.name}
+                          onChange={(e) => handleUpdateSetupTeam(team.id, { name: e.target.value })}
+                          className="flex-1 min-w-0 bg-white border border-slate-200 px-2 py-1.5 text-xs font-bold rounded-lg shadow-xs text-slate-700 focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                          placeholder="Nombre del equipo..."
+                        />
+
+                        {/* Color Picker HTML5 */}
+                        <input 
+                          type="color" 
+                          value={team.color}
+                          onChange={(e) => handleUpdateSetupTeam(team.id, { color: e.target.value })}
+                          className="w-8 h-8 rounded cursor-pointer border border-slate-200 shrink-0 p-0"
+                          title="Elegir Color"
+                        />
+
+                        {/* Delete helper btn */}
+                        <button
+                          onClick={() => handleRemoveSetupTeam(team.id)}
+                          disabled={setupTeams.length <= 2}
+                          className="text-rose-500 hover:text-rose-600 hover:bg-rose-55 p-1.5 rounded-lg disabled:opacity-30 cursor-pointer shrink-0"
+                          title="Eliminar Equipo"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Quick Addition Section with Presets */}
+                  <div className="space-y-2 pt-2">
+                    <span className="text-[10px] font-bold text-slate-400 font-sans tracking-wide block">EQUIPOS PREDEFINIDOS (Presiona para agregar rápido)</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { name: "Agaves", icon: "🌱", color: "#10b981" },
+                        { name: "Mariachis", icon: "🎺", color: "#f59e0b" },
+                        { name: "Tortas Ahogadas", icon: "🥖", color: "#f97316" },
+                        { name: "Leones", icon: "🦁", color: "#ef4444" },
+                        { name: "Águilas", icon: "🦅", color: "#3b82f6" },
+                        { name: "Robots", icon: "🤖", color: "#6366f1" },
+                        { name: "Científicos", icon: "⚗️", color: "#a855f7" },
+                        { name: "Astronautas", icon: "🚀", color: "#06b6d4" }
+                      ].map((preset) => (
+                        <button
+                          key={preset.name}
+                          type="button"
+                          onClick={() => {
+                            if (setupTeams.length >= 8) return;
+                            if (setupTeams.some(t => t.name.toLowerCase() === preset.name.toLowerCase())) return;
+                            handleAddSetupTeam(preset);
+                          }}
+                          disabled={setupTeams.length >= 8 || setupTeams.some(t => t.name.toLowerCase() === preset.name.toLowerCase())}
+                          className="px-2 py-1 bg-white hover:bg-indigo-50 border border-slate-200 text-slate-600 hover:text-indigo-600 disabled:opacity-40 font-ans text-[10px] font-bold rounded-lg shadow-sm transition-colors cursor-pointer flex items-center gap-1 shrink-0"
+                        >
+                          <span>{preset.icon}</span>
+                          <span>{preset.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                </div>
+              )}
+
+            </div>
+
+            {/* Footer buttons */}
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3 shrink-0">
+              <button
+                type="button"
+                onClick={() => setHostingQuizId(null)}
+                className="px-4 py-2.5 bg-white border border-slate-200 text-slate-600 hover:bg-slate-100 font-bold rounded-xl text-xs cursor-pointer"
+              >
+                Cancelar
+              </button>
+              
+              <button
+                type="button"
+                onClick={commitHostGame}
+                disabled={setupGameMode === "teams" && (setupTeams.length < 2 || setupTeams.length > 8)}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs shadow-md shadow-indigo-100 cursor-pointer"
+              >
+                Lanzar Cuestionario
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

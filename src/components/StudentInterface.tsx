@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { 
   Check, X, Trophy, RefreshCw, AlertCircle, 
-  Gamepad2, Sparkles, Zap, Award, Smile 
+  Gamepad2, Sparkles, Zap, Award, Smile, Users
 } from "lucide-react";
 import { socket } from "../lib/socket";
-import { Player } from "../types";
+import { Player, Team } from "../types";
 import { AvatarRenderer, AVATAR_LIST, AVATAR_CATEGORIES, getAvatarById } from "./AvatarCatalog";
 
 export default function StudentInterface() {
@@ -12,6 +12,13 @@ export default function StudentInterface() {
   const [name, setName] = useState(() => localStorage.getItem("prepmaster_name") || "");
   const [selectedAvatarId, setSelectedAvatarId] = useState(() => localStorage.getItem("prepmaster_avatar_id") || "cult_mariachi");
   const [activeCategory, setActiveCategory] = useState("Todos");
+  
+  // Team selection states
+  const [roomGameMode, setRoomGameMode] = useState<'individual' | 'teams'>('individual');
+  const [roomTeams, setRoomTeams] = useState<Team[]>([]);
+  const [playersInSession, setPlayersInSession] = useState<Player[]>([]);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(() => localStorage.getItem("prepmaster_team_id") || null);
+  
   const [joined, setJoined] = useState(false);
   const [joinedPin, setJoinedPin] = useState("");
   const [roomTitle, setRoomTitle] = useState("");
@@ -58,6 +65,7 @@ export default function StudentInterface() {
       const storedName = localStorage.getItem("prepmaster_name");
       const storedPlayerId = localStorage.getItem("prepmaster_player_id");
       const storedAvatarId = localStorage.getItem("prepmaster_avatar_id");
+      const storedTeamId = localStorage.getItem("prepmaster_team_id");
 
       if (storedPin && storedName) {
         setSubmitting(true);
@@ -65,7 +73,8 @@ export default function StudentInterface() {
           pin: storedPin,
           name: storedName,
           playerId: storedPlayerId || undefined,
-          avatarId: storedAvatarId || undefined
+          avatarId: storedAvatarId || undefined,
+          teamId: storedTeamId || undefined
         });
       }
     };
@@ -81,13 +90,15 @@ export default function StudentInterface() {
     const storedName = localStorage.getItem("prepmaster_name");
     const storedPlayerId = localStorage.getItem("prepmaster_player_id");
     const storedAvatarId = localStorage.getItem("prepmaster_avatar_id");
+    const storedTeamId = localStorage.getItem("prepmaster_team_id");
     if (storedPin && storedName && !joined) {
       setSubmitting(true);
       socket.emit("player:join", {
         pin: storedPin,
         name: storedName,
         playerId: storedPlayerId || undefined,
-        avatarId: storedAvatarId || undefined
+        avatarId: storedAvatarId || undefined,
+        teamId: storedTeamId || undefined
       });
     }
 
@@ -99,11 +110,22 @@ export default function StudentInterface() {
 
   // Set up socket listeners for student activities
   useEffect(() => {
-    socket.on("player:join-success", (data: { player: Player; pin: string; title: string; status?: any; currentQuestionIndex?: number; reconnected?: boolean }) => {
+    socket.on("player:join-success", (data: { 
+      player: Player; 
+      pin: string; 
+      title: string; 
+      status?: any; 
+      currentQuestionIndex?: number; 
+      reconnected?: boolean;
+      gameMode?: 'individual' | 'teams';
+      teams?: Team[];
+    }) => {
       setJoined(true);
       setJoinedPin(data.pin);
       setRoomTitle(data.title);
       setPlayerInfo(data.player);
+      setRoomGameMode(data.gameMode || "individual");
+      setRoomTeams(data.teams || []);
       
       if (data.status) {
         setCurrentStatus(data.status);
@@ -124,6 +146,13 @@ export default function StudentInterface() {
         localStorage.setItem("prepmaster_avatar_id", data.player.avatarId);
         setSelectedAvatarId(data.player.avatarId);
       }
+      if (data.player.teamId) {
+        localStorage.setItem("prepmaster_team_id", data.player.teamId);
+      }
+    });
+
+    socket.on("player:joined-list", (data: { players: Player[] }) => {
+      setPlayersInSession(data.players || []);
     });
 
     socket.on("player:join-error", (data: { message: string }) => {
@@ -209,6 +238,7 @@ export default function StudentInterface() {
 
     return () => {
       socket.off("player:join-success");
+      socket.off("player:joined-list");
       socket.off("player:join-error");
       socket.off("game:status-update");
       socket.off("countdown:tick");
@@ -250,6 +280,8 @@ export default function StudentInterface() {
     localStorage.removeItem("prepmaster_pin");
     localStorage.removeItem("prepmaster_name");
     localStorage.removeItem("prepmaster_player_id");
+    localStorage.removeItem("prepmaster_team_id");
+    setSelectedTeamId(null);
     setJoined(false);
     setJoinedPin("");
     setRoomTitle("");
@@ -408,6 +440,110 @@ export default function StudentInterface() {
             {submitting ? "Verificando..." : "¡Unirse a Jugar!"}
           </button>
         </form>
+      </div>
+    );
+  }
+
+  // TEAM SELECTION INTERCEPTOR
+  if (joined && roomGameMode === "teams" && !playerInfo?.teamId) {
+    return (
+      <div className="max-w-xl mx-auto p-6 sm:p-8 bg-white border border-slate-200 rounded-3xl shadow-xl space-y-6 text-slate-800 animate-fade-in" id="student-team-selection">
+        <div className="text-center space-y-2">
+          <Users className="text-indigo-650 mx-auto w-12 h-12" />
+          <h2 className="text-2xl font-extrabold tracking-tight font-sans text-slate-900">Selecciona tu equipo</h2>
+          <p className="text-xs text-slate-500">Esta partida se juega en Modo Equipos. Elige tu escuadra cooperativa para unerte:</p>
+        </div>
+
+        {error && (
+          <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-xl p-3 text-rose-800" id="team-error-box">
+            <AlertCircle className="shrink-0 mt-0.5 text-rose-550" size={16} />
+            <span className="text-xs font-sans font-semibold">{error}</span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {roomTeams.map((team) => {
+            const teamMembers = playersInSession.filter(p => p.teamId === team.id);
+            const isSelected = selectedTeamId === team.id;
+            
+            return (
+              <div
+                key={team.id}
+                onClick={() => setSelectedTeamId(team.id)}
+                className="p-5 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between h-36 relative select-none"
+                style={{ 
+                  borderColor: isSelected ? team.color : '#e2e8f0',
+                  backgroundColor: isSelected ? `${team.color}10` : '#f8fafc'
+                }}
+              >
+                {/* Icon and Name */}
+                <div className="flex items-center gap-3">
+                  <span className="text-3xl" role="img" aria-label={team.name}>
+                    {team.icon}
+                  </span>
+                  <div>
+                    <h3 className="font-sans font-black text-slate-900 text-sm leading-tight">{team.name}</h3>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: team.color }} />
+                      <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 font-mono">
+                        Color Activo
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Member count indicator */}
+                <div className="flex items-center justify-between mt-auto">
+                  <span className="text-[10px] font-bold text-slate-500 font-sans uppercase">
+                    Integrantes
+                  </span>
+                  <span className="text-xs font-black text-slate-800 px-2.5 py-0.5 bg-white border border-slate-200 rounded-full shadow-xs">
+                    {teamMembers.length} {teamMembers.length === 1 ? 'alumno' : 'alumnos'}
+                  </span>
+                </div>
+
+                {/* Selected visual Checkmark */}
+                {isSelected && (
+                  <div 
+                    className="absolute top-3 right-3 w-5 h-5 rounded-full flex items-center justify-center text-white shadow-xs"
+                    style={{ backgroundColor: team.color }}
+                  >
+                    <Check size={12} strokeWidth={3} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (!selectedTeamId) {
+              setError("Por favor selecciona un equipo de la lista");
+              return;
+            }
+            setError(null);
+            setSubmitting(true);
+            
+            // Persist the selected team locally
+            localStorage.setItem("prepmaster_team_id", selectedTeamId);
+            
+            // Re-join with teamId so server updates our player entry
+            socket.emit("player:join", {
+              pin: joinedPin,
+              name: playerInfo?.name || name,
+              playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || undefined,
+              avatarId: playerInfo?.avatarId || selectedAvatarId,
+              teamId: selectedTeamId
+            });
+          }}
+          disabled={!selectedTeamId}
+          className="w-full text-white font-sans font-extrabold py-3.5 px-6 rounded-xl shadow-md transition-transform active:scale-[0.98] disabled:opacity-50 text-sm tracking-wide cursor-pointer text-center font-sans font-bold"
+          style={{ backgroundColor: selectedTeamId ? roomTeams.find(t => t.id === selectedTeamId)?.color : '#94a3b8' }}
+        >
+          {submitting ? "Confirmando Equipo..." : "Confirmar y Entrar a la Partida"}
+        </button>
       </div>
     );
   }

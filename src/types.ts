@@ -30,6 +30,14 @@ export interface Player {
   isLastCorrect: boolean;
   pointsEarned: number;
   avatarId?: string; // Identifier for their customized tropicalized avatar
+  teamId?: string; // TEAM MODE: team ID the player belongs to
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  color: string; // HEX color or tailwind bg-class
+  icon: string;  // emoji or icon string
 }
 
 export interface PlayerAnswerLog {
@@ -60,6 +68,8 @@ export interface GameSession {
   players: Record<string, Player>;
   questionStartedAt: number; // timestamp in ms
   answersHistory?: PlayerAnswerLog[];
+  gameMode?: 'individual' | 'teams';
+  teams?: Team[];
 }
 
 export interface GameResultRow {

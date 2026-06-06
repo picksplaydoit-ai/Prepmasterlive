@@ -6,7 +6,7 @@ import fs from "fs";
 import os from "os";
 import QRCode from "qrcode";
 import { createServer as createViteServer } from "vite";
-import { Question, Questionnaire, Player, GameSession, PlayerAnswersCount } from "./src/types";
+import { Question, Questionnaire, Player, GameSession, PlayerAnswersCount, Team } from "./src/types";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
@@ -126,6 +126,111 @@ function deleteQuestionnaireFromDb(id: string): void {
   }
 }
 
+function getTeamRankingsAndStats(session: GameSession) {
+  if (session.gameMode !== "teams" || !session.teams || session.teams.length === 0) {
+    return null;
+  }
+
+  // Initialize team summaries
+  const teamMap: Record<string, {
+    id: string;
+    name: string;
+    color: string;
+    icon: string;
+    score: number;
+    playerCount: number;
+    totalAnswers: number;
+    correctAnswers: number;
+    totalReactionTime: number;
+    reactionTimeCount: number;
+  }> = {};
+
+  session.teams.forEach(t => {
+    teamMap[t.id] = {
+      id: t.id,
+      name: t.name,
+      color: t.color,
+      icon: t.icon,
+      score: 0,
+      playerCount: 0,
+      totalAnswers: 0,
+      correctAnswers: 0,
+      totalReactionTime: 0,
+      reactionTimeCount: 0
+    };
+  });
+
+  // Compile individual player scores into teams
+  const players = Object.values(session.players);
+  players.forEach(p => {
+    if (p.teamId && teamMap[p.teamId]) {
+      teamMap[p.teamId].score += p.score;
+      teamMap[p.teamId].playerCount++;
+    }
+  });
+
+  // Compile answer history for stats
+  const logs = session.answersHistory || [];
+  logs.forEach(log => {
+    // Find player to get their team
+    const player = players.find(pl => (pl.playerId || pl.id) === log.playerId) || Object.values(session.players).find(pl => pl.id === log.playerId);
+    if (player && player.teamId && teamMap[player.teamId]) {
+      const t = teamMap[player.teamId];
+      t.totalAnswers++;
+      if (log.isCorrect) {
+        t.correctAnswers++;
+      }
+      if (log.reactionTime > 0) {
+        t.totalReactionTime += log.reactionTime;
+        t.reactionTimeCount++;
+      }
+    }
+  });
+
+  const teamList = Object.values(teamMap);
+
+  // Compute stats
+  let maxPointsTeam = teamList[0] || null;
+  let fastestTeam = teamList[0] || null;
+  let bestAccuracyTeam = teamList[0] || null;
+
+  let minAvgTime = Infinity;
+  let maxAccuracy = -1;
+
+  teamList.forEach(t => {
+    // 1. Max points
+    if (!maxPointsTeam || t.score > maxPointsTeam.score) {
+      maxPointsTeam = t;
+    }
+
+    // 2. Fastest (min average response time)
+    const avgTime = t.reactionTimeCount > 0 ? (t.totalReactionTime / t.reactionTimeCount) : Infinity;
+    if (avgTime < minAvgTime) {
+      minAvgTime = avgTime;
+      fastestTeam = t;
+    }
+
+    // 3. Best accuracy
+    const accuracy = t.totalAnswers > 0 ? (t.correctAnswers / t.totalAnswers) : 0;
+    if (accuracy > maxAccuracy) {
+      maxAccuracy = accuracy;
+      bestAccuracyTeam = t;
+    }
+  });
+
+  // Sort teams by score descending for ranking
+  const sortedTeams = [...teamList].sort((a, b) => b.score - a.score);
+
+  return {
+    rankings: sortedTeams,
+    stats: {
+      maxPointsTeam: maxPointsTeam ? { id: maxPointsTeam.id, name: maxPointsTeam.name, icon: maxPointsTeam.icon, color: maxPointsTeam.color, score: maxPointsTeam.score } : null,
+      fastestTeam: fastestTeam && minAvgTime !== Infinity ? { id: fastestTeam.id, name: fastestTeam.name, icon: fastestTeam.icon, color: fastestTeam.color, avgTimeMs: minAvgTime } : (teamList[0] ? { id: teamList[0].id, name: teamList[0].name, icon: teamList[0].icon, color: teamList[0].color } : null),
+      bestAccuracyTeam: bestAccuracyTeam && bestAccuracyTeam.totalAnswers > 0 ? { id: bestAccuracyTeam.id, name: bestAccuracyTeam.name, icon: bestAccuracyTeam.icon, color: bestAccuracyTeam.color, accuracy: maxAccuracy * 100 } : (teamList[0] ? { id: teamList[0].id, name: teamList[0].name, icon: teamList[0].icon, color: teamList[0].color } : null)
+    }
+  };
+}
+
 // Save active game history to SQLite
 function saveGameSessionHistory(session: GameSession): void {
   try {
@@ -219,7 +324,9 @@ function saveGameSessionHistory(session: GameSession): void {
     const questionnaireJSON = JSON.stringify({
       id: qid,
       title: session.title,
-      questions: session.questions
+      questions: session.questions,
+      gameMode: session.gameMode || "individual",
+      teams: session.teams || []
     });
 
     const playersJSON = JSON.stringify(Object.values(session.players));
@@ -371,10 +478,13 @@ app.get("/api/export/:pin", (req, res) => {
 
   const sortedPlayers = Object.values(session.players).sort((a, b) => b.score - a.score);
   
-  let csv = "Rango,Nombre,Avatar,Puntuacion,Racha Maxima\n";
+  let csv = "Rango,Nombre,Avatar,Equipo,Puntuacion,Racha Maxima\n";
   sortedPlayers.forEach((p, idx) => {
     const avatarName = p.avatarId || "cult_mariachi";
-    csv += `${idx + 1},"${p.name.replace(/"/g, '""')}","${avatarName}",${p.score},${p.streak}\n`;
+    const teamName = p.teamId && session.teams
+      ? (session.teams.find(t => t.id === p.teamId)?.name || "")
+      : "Individual";
+    csv += `${idx + 1},"${p.name.replace(/"/g, '""')}","${avatarName}","${teamName.replace(/"/g, '""')}",${p.score},${p.streak}\n`;
   });
 
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -392,7 +502,9 @@ app.get("/api/session-results/:pin", (req, res) => {
       title: session.title,
       questions: session.questions,
       players: Object.values(session.players),
-      answersHistory: session.answersHistory || []
+      answersHistory: session.answersHistory || [],
+      gameMode: session.gameMode || "individual",
+      teams: session.teams || []
     });
     return;
   }
@@ -408,7 +520,9 @@ app.get("/api/session-results/:pin", (req, res) => {
         players: JSON.parse(row.players),
         answersHistory: JSON.parse(row.answers),
         date: row.date,
-        topicSummary: JSON.parse(row.topicSummary)
+        topicSummary: JSON.parse(row.topicSummary),
+        gameMode: q.gameMode || "individual",
+        teams: q.teams || []
       });
       return;
     }
@@ -743,7 +857,7 @@ function clearRoomInterval(pin: string): void {
 // Websocket Events
 io.on("connection", (socket: Socket) => {
   // Host initializes a session
-  socket.on("host:create-session", ({ questionnaireId }: { questionnaireId: string }) => {
+  socket.on("host:create-session", ({ questionnaireId, gameMode, teams }: { questionnaireId: string; gameMode?: 'individual' | 'teams'; teams?: Team[] }) => {
     const list = loadQuestionnaires();
     const quiz = list.find((q) => q.id === questionnaireId);
     if (!quiz) {
@@ -767,6 +881,8 @@ io.on("connection", (socket: Socket) => {
       timer: 0,
       players: {},
       questionStartedAt: 0,
+      gameMode: gameMode || "individual",
+      teams: teams || []
     };
 
     activeSessions[pin] = session;
@@ -777,7 +893,9 @@ io.on("connection", (socket: Socket) => {
       pin,
       title: quiz.title,
       questionsCount: quiz.questions.length,
-      players: []
+      players: [],
+      gameMode: session.gameMode,
+      teams: session.teams
     });
   });
 
@@ -929,9 +1047,15 @@ io.on("connection", (socket: Socket) => {
       .sort((a, b) => b.score - a.score)
       .slice(0, 5); // top 5
 
+    const teamData = getTeamRankingsAndStats(session);
+
     io.to(`game:${pin}`).emit("game:status-update", {
       status: "leaderboard",
-      leaderboard: sortedPlayers
+      leaderboard: sortedPlayers,
+      teamRankings: teamData ? teamData.rankings : undefined,
+      teamStats: teamData ? teamData.stats : undefined,
+      gameMode: session.gameMode,
+      teams: session.teams
     });
   });
 
@@ -965,10 +1089,15 @@ io.on("connection", (socket: Socket) => {
       session.status = "ended";
       saveGameSessionHistory(session);
       const sortedPlayers = Object.values(session.players).sort((a, b) => b.score - a.score);
+      const teamData = getTeamRankingsAndStats(session);
       
       io.to(`game:${pin}`).emit("game:status-update", {
         status: "ended",
-        podium: sortedPlayers
+        podium: sortedPlayers,
+        teamRankings: teamData ? teamData.rankings : undefined,
+        teamStats: teamData ? teamData.stats : undefined,
+        gameMode: session.gameMode,
+        teams: session.teams
       });
     }
   });
@@ -981,14 +1110,20 @@ io.on("connection", (socket: Socket) => {
     session.status = "ended";
     saveGameSessionHistory(session);
     const sortedPlayers = Object.values(session.players).sort((a, b) => b.score - a.score);
+    const teamData = getTeamRankingsAndStats(session);
+
     io.to(`game:${pin}`).emit("game:status-update", {
       status: "ended",
-      podium: sortedPlayers
+      podium: sortedPlayers,
+      teamRankings: teamData ? teamData.rankings : undefined,
+      teamStats: teamData ? teamData.stats : undefined,
+      gameMode: session.gameMode,
+      teams: session.teams
     });
   });
 
   // STUDENT CLIENT JOIN ROOM
-  socket.on("player:join", ({ pin, name, playerId, avatarId }: { pin: string; name: string; playerId?: string; avatarId?: string }) => {
+  socket.on("player:join", ({ pin, name, playerId, avatarId, teamId }: { pin: string; name: string; playerId?: string; avatarId?: string; teamId?: string }) => {
     const session = activeSessions[pin];
     if (!session) {
       socket.emit("player:join-error", { message: "La partida con este PIN no existe o se ha cerrado." });
@@ -1028,6 +1163,9 @@ io.on("connection", (socket: Socket) => {
       if (avatarId) {
         existingPlayer.avatarId = avatarId;
       }
+      if (teamId) {
+        existingPlayer.teamId = teamId;
+      }
       
       session.players[socket.id] = existingPlayer;
 
@@ -1039,7 +1177,9 @@ io.on("connection", (socket: Socket) => {
         title: session.title,
         status: session.status,
         currentQuestionIndex: session.currentQuestionIndex,
-        reconnected: true
+        reconnected: true,
+        gameMode: session.gameMode || "individual",
+        teams: session.teams || []
       });
 
       // Synchronize player with current game stage
@@ -1078,6 +1218,9 @@ io.on("connection", (socket: Socket) => {
 
       // Notify host and other clients about active list
       io.to(`host:${pin}`).emit("player:joined-list", {
+        players: Object.values(session.players)
+      });
+      io.to(`game:${pin}`).emit("player:joined-list", {
         players: Object.values(session.players)
       });
       io.to(`game:${pin}`).emit("player:list-update", {
@@ -1128,16 +1271,26 @@ io.on("connection", (socket: Socket) => {
       lastAnswerTime: 0,
       isLastCorrect: false,
       pointsEarned: 0,
-      avatarId: finalAvatar
+      avatarId: finalAvatar,
+      teamId: teamId || undefined
     };
 
     session.players[socket.id] = player;
     socket.join(`game:${pin}`);
 
-    socket.emit("player:join-success", { player, pin, title: session.title });
+    socket.emit("player:join-success", { 
+      player, 
+      pin, 
+      title: session.title,
+      gameMode: session.gameMode || "individual",
+      teams: session.teams || []
+    });
     
     // Notify host & other students
     io.to(`host:${pin}`).emit("player:joined-list", {
+      players: Object.values(session.players)
+    });
+    io.to(`game:${pin}`).emit("player:joined-list", {
       players: Object.values(session.players)
     });
     io.to(`game:${pin}`).emit("player:list-update", {
@@ -1226,6 +1379,9 @@ io.on("connection", (socket: Socket) => {
         if (session.status === "lobby") {
           delete session.players[socket.id];
           io.to(`host:${pin}`).emit("player:joined-list", {
+            players: Object.values(session.players)
+          });
+          io.to(`game:${pin}`).emit("player:joined-list", {
             players: Object.values(session.players)
           });
           io.to(`game:${pin}`).emit("player:list-update", {
