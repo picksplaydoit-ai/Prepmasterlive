@@ -1,0 +1,1425 @@
+import React, { useState, useEffect } from "react";
+import { 
+  Play, Plus, Edit3, Trash2, Users, QrCode, Clipboard, 
+  Trophy, Award, RefreshCw, BarChart2, CheckCircle, 
+  ChevronRight, VolumeX, Download, LogOut, ArrowRight, Clock, HelpCircle,
+  Tv, ListPlus, FileSpreadsheet, TrendingDown, Calendar
+} from "lucide-react";
+import { socket } from "../lib/socket";
+import { Questionnaire, Player, GameSession, PlayerAnswersCount } from "../types";
+import * as XLSX from "xlsx";
+import Papa from "papaparse";
+import { AvatarRenderer, getAvatarById } from "./AvatarCatalog";
+
+interface TeacherDashboardProps {
+  onCreateNew: () => void;
+  onEdit: (quiz: Questionnaire) => void;
+  onImport: () => void;
+}
+
+interface ConnectionInfo {
+  ips: string[];
+  preferredIP: string;
+  localUrl: string;
+  appUrl: string;
+  qrLocal: string;
+  qrApp: string;
+}
+
+export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: TeacherDashboardProps) {
+  const [quizzes, setQuizzes] = useState<Questionnaire[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  // Connection details retrieved from server
+  const [connInfo, setConnInfo] = useState<ConnectionInfo | null>(null);
+
+  // Active game states
+  const [activePin, setActivePin] = useState<string | null>(null);
+  const [gameTitle, setGameTitle] = useState("");
+  const [gameStatus, setGameStatus] = useState<GameSession["status"] | null>(null);
+  
+  const [playersList, setPlayersList] = useState<Player[]>([]);
+  const [currentQuestionIdx, setCurrentQuestionIdx] = useState(-1);
+  const [totalQuestionsCount, setTotalQuestionsCount] = useState(0);
+  const [timerRemaining, setTimerRemaining] = useState(0);
+  const [answeredCount, setAnsweredCount] = useState(0);
+  const [countdownTimer, setCountdownTimer] = useState(5);
+
+  // Stats revealed info
+  const [revealData, setRevealData] = useState<{
+    correctOption: number;
+    stats: { option0: number; option1: number; option2: number; option3: number };
+    players?: Player[];
+  } | null>(null);
+
+  // Leaderboard data
+  const [leaderboard, setLeaderboard] = useState<Player[]>([]);
+
+  // Podium (Final stand)
+  const [podium, setPodium] = useState<Player[]>([]);
+
+  // Clipboard utility
+  const [copied, setCopied] = useState(false);
+
+  // New states for match results and export metrics
+  const [gameResultsData, setGameResultsData] = useState<any | null>(null);
+  const [loadingResults, setLoadingResults] = useState(false);
+  const [resultsError, setResultsError] = useState<string | null>(null);
+
+  // Fetch detailed results when a game completes
+  useEffect(() => {
+    if (gameStatus === "ended" && activePin) {
+      setLoadingResults(true);
+      setResultsError(null);
+      fetch(`/api/session-results/${activePin}`)
+        .then((res) => {
+          if (!res.ok) throw new Error("No se pudieron cargar los detalles de la partida.");
+          return res.json();
+        })
+        .then((data) => {
+          setGameResultsData(data);
+          setLoadingResults(false);
+        })
+        .catch((err) => {
+          console.error("Error al cargar resultados de la partida:", err);
+          setResultsError(err.message);
+          setLoadingResults(false);
+        });
+    } else if (gameStatus !== "ended") {
+      setGameResultsData(null);
+    }
+  }, [gameStatus, activePin]);
+
+  // Load quizzes and connection details on mount
+  useEffect(() => {
+    fetchQuizzes();
+    fetchConnectionInfo();
+  }, [activePin]);
+
+  const fetchQuizzes = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch("/api/questionnaires");
+      if (res.ok) {
+        const data = await res.json();
+        setQuizzes(data);
+      } else {
+        setError("Error al cargar los cuestionarios.");
+      }
+    } catch (err) {
+      setError("No se pudo conectar con el servidor local para obtener cuestionarios.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchConnectionInfo = async () => {
+    try {
+      const res = await fetch("/api/ip");
+      if (res.ok) {
+        const data = await res.json();
+        setConnInfo(data);
+      }
+    } catch (err) {
+      console.error("Error al obtener la información de IP local:", err);
+    }
+  };
+
+  const handleDeleteQuiz = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!window.confirm("¿Seguro que deseas eliminar este cuestionario? Se perderán todos sus datos.")) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/questionnaires/${id}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        fetchQuizzes();
+      } else {
+        alert("Ocurrió un error al eliminar.");
+      }
+    } catch (err) {
+      alert("Error de conexión al eliminar.");
+    }
+  };
+
+  // Connect to Game Sockets on Launch
+  const handleHostGame = (quizId: string) => {
+    const targetQuiz = quizzes.find(q => q.id === quizId);
+    if (!targetQuiz) return;
+
+    setGameTitle(targetQuiz.title);
+    setTotalQuestionsCount(targetQuiz.questions.length);
+    setPlayersList([]);
+    setRevealData(null);
+    setLeaderboard([]);
+    setPodium([]);
+    
+    // Request server to construct game room session
+    socket.emit("host:create-session", { questionnaireId: quizId });
+  };
+
+  // Socket listener setup
+  useEffect(() => {
+    socket.on("session:created", (data: { pin: string; title: string; questionsCount: number; players: Player[] }) => {
+      setActivePin(data.pin);
+      setGameTitle(data.title);
+      setTotalQuestionsCount(data.questionsCount);
+      setGameStatus("lobby");
+      setPlayersList(data.players || []);
+    });
+
+    socket.on("player:joined-list", (data: { players: Player[] }) => {
+      setPlayersList(data.players);
+    });
+
+    socket.on("player:list-update", (data: { count: number }) => {
+      // Just double assurance of synchronization
+    });
+
+    socket.on("countdown:tick", (data: { timer: number }) => {
+      setGameStatus("countdown");
+      setCountdownTimer(data.timer);
+    });
+
+    // Active Question ticks
+    socket.on("question:active", (data: any) => {
+      setGameStatus("question");
+      setCurrentQuestionIdx(data.currentIndex);
+      setTimerRemaining(data.timeLimit);
+      setAnsweredCount(0);
+      setRevealData(null);
+    });
+
+    socket.on("question:tick", (data: { timer: number; answeredCount: number }) => {
+      setTimerRemaining(data.timer);
+      setAnsweredCount(data.answeredCount);
+    });
+
+    socket.on("player:answered-count", (data: { answeredCount: number; totalInGame: number }) => {
+      setAnsweredCount(data.answeredCount);
+    });
+
+    // Question Reveal Correct option and stats
+    socket.on("question:revealed", (data: { status: string; correctOption: number; stats: PlayerAnswersCount; players: Player[] }) => {
+      setGameStatus("reveal");
+      setRevealData({
+        correctOption: data.correctOption,
+        stats: data.stats,
+        players: data.players
+      });
+      // Synchronize in-memory scores too
+      setPlayersList(data.players);
+    });
+
+    // Generic game state updates (lobby/reveals/leaderboards)
+    socket.on("game:status-update", (data: any) => {
+      if (data.status === "countdown") {
+        setGameStatus("countdown");
+        setCountdownTimer(data.timer);
+        if (data.currentQuestionIndex !== undefined) {
+          setCurrentQuestionIdx(data.currentQuestionIndex);
+        }
+      }
+      if (data.status === "leaderboard") {
+        setGameStatus("leaderboard");
+        setLeaderboard(data.leaderboard);
+      }
+      if (data.status === "ended") {
+        setGameStatus("ended");
+        setPodium(data.podium);
+      }
+    });
+
+    return () => {
+      socket.off("session:created");
+      socket.off("player:joined-list");
+      socket.off("player:list-update");
+      socket.off("countdown:tick");
+      socket.off("question:active");
+      socket.off("question:tick");
+      socket.off("player:answered-count");
+      socket.off("question:revealed");
+      socket.off("game:status-update");
+    };
+  }, []);
+
+  const handleStartGame = () => {
+    if (!activePin) return;
+    socket.emit("host:start-game", { pin: activePin });
+  };
+
+  const handleSkipQuestion = () => {
+    if (!activePin) return;
+    socket.emit("host:skip-question", { pin: activePin });
+  };
+
+  const handleShowLeaderboard = () => {
+    if (!activePin) return;
+    socket.emit("host:show-leaderboard", { pin: activePin });
+  };
+
+  const handleNextQuestion = () => {
+    if (!activePin) return;
+    socket.emit("host:next-question", { pin: activePin });
+  };
+
+  const handleCancelGame = () => {
+    if (!window.confirm("¿Seguro que deseas salir? Se perderá la partida actual.")) {
+      return;
+    }
+    if (activePin) {
+      socket.emit("host:end-game", { pin: activePin });
+    }
+    setActivePin(null);
+    setGameStatus(null);
+    setCurrentQuestionIdx(-1);
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleExportExcel = () => {
+    if (!gameResultsData) return;
+    try {
+      const title = gameResultsData.title || "Partida";
+      const dateStr = new Date(gameResultsData.date || new Date().toISOString()).toLocaleDateString("es-ES");
+
+      // 1. Resultados Sheet Data
+      const sheet1Data = gameResultsData.players.map((p: any, idx: number) => {
+        const studentLogs = gameResultsData.answersHistory.filter((l: any) => l.playerId === (p.playerId || p.id));
+        const aciertos = studentLogs.filter((l: any) => l.isCorrect).length;
+        const sinResponder = studentLogs.filter((l: any) => l.optionIndex === -1).length;
+        const errores = studentLogs.length - aciertos - sinResponder;
+
+        const totalAnsweredWithTime = studentLogs.filter((l: any) => l.optionIndex !== -1);
+        const avgResponseTimeMs = totalAnsweredWithTime.length > 0 
+          ? totalAnsweredWithTime.reduce((sum: number, l: any) => sum + l.reactionTime, 0) / totalAnsweredWithTime.length 
+          : 0;
+        const avgResponseTimeSec = (avgResponseTimeMs / 1000).toFixed(2);
+
+        const accuracyPct = studentLogs.length > 0 ? Math.round((aciertos / studentLogs.length) * 100) : 0;
+
+        return {
+          "Lugar": idx + 1,
+          "Nombre del alumno": p.name,
+          "Avatar": p.avatarId ? getAvatarById(p.avatarId).name : "Estándar",
+          "Puntaje total": p.score,
+          "Aciertos": aciertos,
+          "Errores": errores,
+          "Sin responder": sinResponder,
+          "Porcentaje de aciertos": `${accuracyPct}%`,
+          "Tiempo promedio de respuesta": `${avgResponseTimeSec} s`,
+          "Racha máxima": p.streak || 0,
+          "Fecha": dateStr,
+          "Nombre del cuestionario": title
+        };
+      });
+
+      // 2. Detalle por pregunta Sheet Data
+      const sheet2Data: any[] = [];
+      gameResultsData.questions.forEach((q: any, qIdx: number) => {
+        const questionLogs = gameResultsData.answersHistory.filter((l: any) => l.questionIndex === qIdx);
+        const alphabet = ["A", "B", "C", "D"];
+        const correctLetter = alphabet[q.correctOption] || "N/A";
+
+        gameResultsData.players.forEach((p: any) => {
+          const log = questionLogs.find((l: any) => l.playerId === (p.playerId || p.id));
+          
+          let resAlumno = "Sin responder";
+          let statusStr = "Sin responder";
+          let puntos = 0;
+          let tRespuesta = "N/A";
+
+          if (log) {
+            if (log.optionIndex !== -1) {
+              resAlumno = alphabet[log.optionIndex] || "N/A";
+              statusStr = log.isCorrect ? "Correcta" : "Incorrecta";
+              puntos = log.pointsEarned || 0;
+              tRespuesta = `${(log.reactionTime / 1000).toFixed(2)} s`;
+            }
+          }
+
+          sheet2Data.push({
+            "Número de pregunta": qIdx + 1,
+            "Pregunta": q.text,
+            "Tema": q.topic || "General",
+            "Respuesta correcta": correctLetter,
+            "Alumno": p.name,
+            "Respuesta del alumno": resAlumno,
+            "Correcta / Incorrecta / Sin responder": statusStr,
+            "Puntos obtenidos": puntos,
+            "Tiempo de respuesta": tRespuesta
+          });
+        });
+      });
+
+      // 3. Resumen por tema Sheet Data
+      const topicSummaryObj: Record<string, {
+        topic: string;
+        totalQuestions: number;
+        correctGrupales: number;
+        erroresGrupales: number;
+        totalGrupales: number;
+        questionsList: { text: string; correctRate: number }[];
+      }> = {};
+
+      gameResultsData.questions.forEach((q: any, qIdx: number) => {
+        const topic = q.topic ? q.topic.trim() : "General";
+        if (!topicSummaryObj[topic]) {
+          topicSummaryObj[topic] = {
+            topic,
+            totalQuestions: 0,
+            correctGrupales: 0,
+            erroresGrupales: 0,
+            totalGrupales: 0,
+            questionsList: []
+          };
+        }
+        topicSummaryObj[topic].totalQuestions++;
+        
+        const qLogs = gameResultsData.answersHistory.filter((l: any) => l.questionIndex === qIdx);
+        const qCorrect = qLogs.filter((l: any) => l.isCorrect).length;
+        const qTotal = qLogs.length;
+        const qRate = qTotal > 0 ? (qCorrect / qTotal) : 0;
+        
+        topicSummaryObj[topic].questionsList.push({
+          text: q.text,
+          correctRate: qRate
+        });
+      });
+
+      gameResultsData.answersHistory.forEach((log: any) => {
+        const q = gameResultsData.questions[log.questionIndex];
+        if (!q) return;
+        const topic = q.topic ? q.topic.trim() : "General";
+        const summ = topicSummaryObj[topic];
+        if (summ) {
+          summ.totalGrupales++;
+          if (log.isCorrect) {
+            summ.correctGrupales++;
+          } else if (log.optionIndex !== -1) {
+            summ.erroresGrupales++;
+          }
+        }
+      });
+
+      const sheet3Data = Object.values(topicSummaryObj).map((summ) => {
+        let hardestQText = "Ninguna";
+        let minRate = 1.1;
+        summ.questionsList.forEach((qitem) => {
+          if (qitem.correctRate < minRate) {
+            minRate = qitem.correctRate;
+            hardestQText = qitem.text;
+          }
+        });
+
+        const gpAccuracy = summ.totalGrupales > 0 ? Math.round((summ.correctGrupales / summ.totalGrupales) * 100) : 0;
+
+        return {
+          "Tema": summ.topic,
+          "Total de preguntas": summ.totalQuestions,
+          "Aciertos grupales": summ.correctGrupales,
+          "Errores grupales": summ.erroresGrupales,
+          "Porcentaje de aciertos grupal": `${gpAccuracy}%`,
+          "Pregunta más difícil del tema": hardestQText
+        };
+      });
+
+      const wsResultados = XLSX.utils.json_to_sheet(sheet1Data);
+      const wsDetalles = XLSX.utils.json_to_sheet(sheet2Data);
+      const wsTemas = XLSX.utils.json_to_sheet(sheet3Data);
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, wsResultados, "Resultados");
+      XLSX.utils.book_append_sheet(wb, wsDetalles, "Detalle por pregunta");
+      XLSX.utils.book_append_sheet(wb, wsTemas, "Resumen por tema");
+
+      XLSX.writeFile(wb, `resultados_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}.xlsx`);
+    } catch (e) {
+      console.error("Error al exportar a Excel:", e);
+    }
+  };
+
+  const handleExportCSV = () => {
+    if (!gameResultsData) return;
+    try {
+      const title = gameResultsData.title || "Partida";
+      const dateStr = new Date(gameResultsData.date || new Date().toISOString()).toLocaleDateString("es-ES");
+
+      // 1. resultados.csv
+      const csv1Data = gameResultsData.players.map((p: any, idx: number) => {
+        const studentLogs = gameResultsData.answersHistory.filter((l: any) => l.playerId === (p.playerId || p.id));
+        const aciertos = studentLogs.filter((l: any) => l.isCorrect).length;
+        const sinResponder = studentLogs.filter((l: any) => l.optionIndex === -1).length;
+        const errores = studentLogs.length - aciertos - sinResponder;
+
+        const totalAnsweredWithTime = studentLogs.filter((l: any) => l.optionIndex !== -1);
+        const avgResponseTimeMs = totalAnsweredWithTime.length > 0 
+          ? totalAnsweredWithTime.reduce((sum: number, l: any) => sum + l.reactionTime, 0) / totalAnsweredWithTime.length 
+          : 0;
+        const avgResponseTimeSec = (avgResponseTimeMs / 1000).toFixed(2);
+
+        const accuracyPct = studentLogs.length > 0 ? Math.round((aciertos / studentLogs.length) * 100) : 0;
+
+        return {
+          "Lugar": idx + 1,
+          "Nombre del alumno": p.name,
+          "Avatar": p.avatarId ? getAvatarById(p.avatarId).name : "Estándar",
+          "Puntaje total": p.score,
+          "Aciertos": aciertos,
+          "Errores": errores,
+          "Sin responder": sinResponder,
+          "Porcentaje de aciertos": `${accuracyPct}%`,
+          "Tiempo promedio de respuesta": `${avgResponseTimeSec} s`,
+          "Racha máxima": p.streak || 0,
+          "Fecha": dateStr,
+          "Nombre del cuestionario": title
+        };
+      });
+
+      const csvContent1 = Papa.unparse(csv1Data);
+      triggerCSVDownload(csvContent1, `resultados_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}.csv`);
+
+      // 2. detalle_por_pregunta.csv
+      const csv2Data: any[] = [];
+      gameResultsData.questions.forEach((q: any, qIdx: number) => {
+        const questionLogs = gameResultsData.answersHistory.filter((l: any) => l.questionIndex === qIdx);
+        const alphabet = ["A", "B", "C", "D"];
+        const correctLetter = alphabet[q.correctOption] || "N/A";
+
+        gameResultsData.players.forEach((p: any) => {
+          const log = questionLogs.find((l: any) => l.playerId === (p.playerId || p.id));
+          
+          let resAlumno = "Sin responder";
+          let statusStr = "Sin responder";
+          let puntos = 0;
+          let tRespuesta = "N/A";
+
+          if (log) {
+            if (log.optionIndex !== -1) {
+              resAlumno = alphabet[log.optionIndex] || "N/A";
+              statusStr = log.isCorrect ? "Correcta" : "Incorrecta";
+              puntos = log.pointsEarned || 0;
+              tRespuesta = `${(log.reactionTime / 1000).toFixed(2)} s`;
+            }
+          }
+
+          csv2Data.push({
+            "Número de pregunta": qIdx + 1,
+            "Pregunta": q.text,
+            "Tema": q.topic || "General",
+            "Respuesta correcta": correctLetter,
+            "Alumno": p.name,
+            "Respuesta del alumno": resAlumno,
+            "Correcta / Incorrecta / Sin responder": statusStr,
+            "Puntos obtenidos": puntos,
+            "Tiempo de respuesta": tRespuesta
+          });
+        });
+      });
+
+      const csvContent2 = Papa.unparse(csv2Data);
+      triggerCSVDownload(csvContent2, `detalle_por_pregunta_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}.csv`);
+
+      // 3. resumen_por_tema.csv
+      const topicSummaryObj: Record<string, {
+        topic: string;
+        totalQuestions: number;
+        correctGrupales: number;
+        erroresGrupales: number;
+        totalGrupales: number;
+        questionsList: { text: string; correctRate: number }[];
+      }> = {};
+
+      gameResultsData.questions.forEach((q: any, qIdx: number) => {
+        const topic = q.topic ? q.topic.trim() : "General";
+        if (!topicSummaryObj[topic]) {
+          topicSummaryObj[topic] = {
+            topic,
+            totalQuestions: 0,
+            correctGrupales: 0,
+            erroresGrupales: 0,
+            totalGrupales: 0,
+            questionsList: []
+          };
+        }
+        topicSummaryObj[topic].totalQuestions++;
+        
+        const qLogs = gameResultsData.answersHistory.filter((l: any) => l.questionIndex === qIdx);
+        const qCorrect = qLogs.filter((l: any) => l.isCorrect).length;
+        const qTotal = qLogs.length;
+        const qRate = qTotal > 0 ? (qCorrect / qTotal) : 0;
+        
+        topicSummaryObj[topic].questionsList.push({
+          text: q.text,
+          correctRate: qRate
+        });
+      });
+
+      gameResultsData.answersHistory.forEach((log: any) => {
+        const q = gameResultsData.questions[log.questionIndex];
+        if (!q) return;
+        const topic = q.topic ? q.topic.trim() : "General";
+        const summ = topicSummaryObj[topic];
+        if (summ) {
+          summ.totalGrupales++;
+          if (log.isCorrect) {
+            summ.correctGrupales++;
+          } else if (log.optionIndex !== -1) {
+            summ.erroresGrupales++;
+          }
+        }
+      });
+
+      const csv3Data = Object.values(topicSummaryObj).map((summ) => {
+        let hardestQText = "Ninguna";
+        let minRate = 1.1;
+        summ.questionsList.forEach((qitem) => {
+          if (qitem.correctRate < minRate) {
+            minRate = qitem.correctRate;
+            hardestQText = qitem.text;
+          }
+        });
+
+        const gpAccuracy = summ.totalGrupales > 0 ? Math.round((summ.correctGrupales / summ.totalGrupales) * 100) : 0;
+
+        return {
+          "Tema": summ.topic,
+          "Total de preguntas": summ.totalQuestions,
+          "Aciertos grupales": summ.correctGrupales,
+          "Errores grupales": summ.erroresGrupales,
+          "Porcentaje de aciertos grupal": `${gpAccuracy}%`,
+          "Pregunta más difícil del tema": hardestQText
+        };
+      });
+
+      const csvContent3 = Papa.unparse(csv3Data);
+      triggerCSVDownload(csvContent3, `resumen_por_tema_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}.csv`);
+
+    } catch (e) {
+      console.error("Error al exportar a CSV:", e);
+    }
+  };
+
+  const triggerCSVDownload = (content: string, filename: string) => {
+    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), content], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // If a game is active, render the dedicated Game Console
+  if (activePin && gameStatus) {
+    const isLobby = gameStatus === "lobby";
+    const isCountdown = gameStatus === "countdown";
+    const isQuestion = gameStatus === "question";
+    const isReveal = gameStatus === "reveal";
+    const isLeaderboard = gameStatus === "leaderboard";
+    const isEnded = gameStatus === "ended";
+
+    // Grab current question safely
+    const currentQuiz = quizzes.find(q => q.id === quizzes.find(item => item.title === gameTitle)?.id);
+    const questionsAndAnswers = currentQuiz?.questions || [];
+    const activeQuestion = questionsAndAnswers[currentQuestionIdx];
+
+    let avgAccuracy = 0;
+    let topStudent = { name: "Ninguno", score: 0 };
+    let hardestQuestionText = "Ninguna";
+    let lowestTopicName = "General";
+    let lowestTopicPct = 0;
+
+    if (gameResultsData) {
+      const totalLogs = gameResultsData.answersHistory?.length || 0;
+      const correctCount = gameResultsData.answersHistory?.filter((l: any) => l.isCorrect).length || 0;
+      avgAccuracy = totalLogs > 0 ? Math.round((correctCount / totalLogs) * 100) : 0;
+
+      topStudent = gameResultsData.players?.reduce(
+        (max: any, p: any) => p.score > max.score ? p : max,
+        gameResultsData.players[0] || { name: "Ninguno", score: 0 }
+      );
+
+      let lowestCorrectRate = 1.1;
+      if (gameResultsData.questions && gameResultsData.questions.length > 0) {
+        gameResultsData.questions.forEach((q: any, idx: number) => {
+          const qLogs = gameResultsData.answersHistory?.filter((l: any) => l.questionIndex === idx) || [];
+          const qCorrect = qLogs.filter((l: any) => l.isCorrect).length;
+          const qTotal = qLogs.length;
+          const qRate = qTotal > 0 ? (qCorrect / qTotal) : 0;
+          if (qRate < lowestCorrectRate) {
+            lowestCorrectRate = qRate;
+            hardestQuestionText = q.text;
+          }
+        });
+      }
+      if (hardestQuestionText === "Ninguna" || lowestCorrectRate > 1.0) {
+        hardestQuestionText = "Ninguna";
+      }
+
+      let lowestTopicAccuracy = 1.1;
+      const topicStats: Record<string, { correct: number; total: number }> = {};
+      gameResultsData.answersHistory?.forEach((log: any) => {
+        const question = gameResultsData.questions[log.questionIndex];
+        const topic = question?.topic ? question.topic.trim() : "General";
+        if (!topicStats[topic]) {
+          topicStats[topic] = { correct: 0, total: 0 };
+        }
+        topicStats[topic].total++;
+        if (log.isCorrect) {
+          topicStats[topic].correct++;
+        }
+      });
+
+      Object.entries(topicStats).forEach(([topic, stats]) => {
+        const accuracy = stats.total > 0 ? (stats.correct / stats.total) : 0;
+        if (accuracy < lowestTopicAccuracy) {
+          lowestTopicAccuracy = accuracy;
+          lowestTopicName = topic;
+        }
+      });
+      lowestTopicPct = lowestTopicAccuracy <= 1.0 ? Math.round(lowestTopicAccuracy * 100) : 0;
+    }
+
+    return (
+      <div className="max-w-6xl mx-auto flex flex-col md:flex-row rounded-3xl bg-slate-100 border border-slate-200 shadow-2xl overflow-hidden min-h-[620px]" id="teacher-live-console">
+        
+        {/* Main interactive area */}
+        <div className="flex-1 flex flex-col p-6 sm:p-8 justify-between" id="console-main-canvas">
+          
+          {/* Active Title bar */}
+          <div className="flex justify-between items-end mb-8" id="active-title-bar">
+            <div className="space-y-1">
+              <p className="text-xs font-bold tracking-widest text-indigo-600 uppercase">
+                {isLobby ? "Lobby de Espera" : `Sesión Activa — Pregunta ${currentQuestionIdx + 1}/${totalQuestionsCount}`}
+              </p>
+              <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-800 italic">
+                {isLobby ? "Esperando la llegada de los estudiantes..." : (activeQuestion?.text || gameTitle)}
+              </h1>
+            </div>
+
+            {isQuestion && (
+              <div className="text-right shrink-0">
+                <span className="block text-4xl font-mono font-bold text-indigo-600">
+                  {answeredCount}/{playersList.length}
+                </span>
+                <span className="text-xs font-semibold text-slate-400 uppercase tracking-tighter block">
+                  Respuestas de Alumnos
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Core Interactive Screen States */}
+
+          {/* 1. LOBBY STATE */}
+          {isLobby && (
+            <div className="flex-1 flex flex-col justify-center space-y-6" id="lobby-state-canvas">
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
+                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+                  <QrCode className="text-indigo-600" size={20} />
+                  <span>¿Cómo unirse a la partida local?</span>
+                </h3>
+                <p className="text-xs sm:text-sm text-slate-500 max-w-xl">
+                  Los alumnos deben conectar sus teléfonos al mismo router local WiFi. Luego, escanean el código QR adjunto o escriben la dirección web en su navegador.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-2">
+                    <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider font-bold">Dirección de Entrada:</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-mono font-bold text-indigo-700 max-w-[170px] truncate select-all">
+                        {connInfo?.appUrl || "Cargando..."}
+                      </span>
+                      <button
+                        onClick={() => copyToClipboard(connInfo?.appUrl || "")}
+                        className="text-xs font-bold bg-white text-slate-700 hover:text-indigo-600 border border-slate-200 py-1 px-2.5 rounded-lg transition-all"
+                      >
+                        {copied ? "Súper" : "Copiar"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex items-center justify-between">
+                    <div>
+                      <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider font-bold block">Red WiFi Local:</span>
+                      <span className="text-xs font-mono font-bold text-slate-700 block">Identificar router actual</span>
+                    </div>
+                    <span className="text-xs bg-indigo-50 text-indigo-700 font-bold px-2 py-1 rounded border border-indigo-100">offline-first</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Waiting players grid */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex-1 flex flex-col justify-between min-h-[160px]">
+                <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-3">
+                  <span className="text-xs font-extrabold text-slate-400 uppercase tracking-widest">Alumnos listos en sala ({playersList.length})</span>
+                  <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 animate-ping"></span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto max-h-[180px] pr-2">
+                  {playersList.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-center py-6 text-slate-400 space-y-2">
+                      <Users size={28} className="text-slate-300 animate-pulse" />
+                      <p className="text-xs font-bold">Esperando que se sumen los teléfonos de los chicos...</p>
+                      <p className="text-[10px] text-slate-400 font-mono">¡Escribe el código PIN: {activePin} en el panel del alumno!</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                      {playersList.map((player) => (
+                        <div 
+                          key={player.id}
+                          className="bg-slate-50 border border-slate-200 py-1.5 px-2 rounded-xl flex items-center gap-1.5 animate-fade-in shadow-sm"
+                        >
+                          <AvatarRenderer id={player.avatarId} size={28} className="shrink-0 bg-white p-0.5 rounded-full border border-slate-200 shadow-xs" />
+                          <span className="text-xs font-bold text-slate-700 truncate" title={player.name}>{player.name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 2. COUNTDOWN STATE */}
+          {isCountdown && (
+            <div className="flex-1 flex flex-col items-center justify-center py-10 space-y-6" id="countdown-state-canvas">
+              <span className="text-xs font-bold tracking-widest text-indigo-600 uppercase bg-indigo-50 px-3 py-1 rounded-full border border-indigo-150">Preparen sus teléfonos</span>
+              <div className="w-24 h-24 rounded-full bg-indigo-600 text-white flex items-center justify-center text-5xl font-black font-mono shadow-xl border border-indigo-400/40 relative">
+                <span className="animate-pulse">{countdownTimer}</span>
+              </div>
+              <div className="text-center max-w-sm bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-1">
+                <p className="text-[10px] text-slate-400 font-bold uppercase font-mono tracking-wider">Pregunta {currentQuestionIdx + 1} de {totalQuestionsCount}</p>
+                <p className="text-sm font-bold text-slate-800 italic leading-snug">"{questionsAndAnswers[currentQuestionIdx]?.text}"</p>
+              </div>
+            </div>
+          )}
+
+          {/* 3. ACTIVE QUESTION RUNNING */}
+          {isQuestion && activeQuestion && (
+            <div className="flex-1 flex flex-col justify-between space-y-6" id="active-question-state-canvas">
+              
+              {/* Central clock visual indicator */}
+              <div className="flex items-center justify-around bg-white p-4 rounded-xl border border-slate-200 shadow-sm gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-200 text-amber-600 flex items-center justify-center shrink-0">
+                    <Clock size={20} />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-widest font-mono block">Segundos restantes</span>
+                    <span className="text-2xl font-mono font-black text-slate-800">{timerRemaining} s</span>
+                  </div>
+                </div>
+
+                <div className="h-8 w-[1px] bg-slate-200"></div>
+
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600 flex items-center justify-center shrink-0">
+                    <Users size={20} />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 uppercase font-bold tracking-widest font-mono block">Total de respuestas</span>
+                    <span className="text-2xl font-mono font-black text-slate-800">{answeredCount}/{playersList.length}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Multi-option visual geometric balance block */}
+              <div className="grid grid-cols-2 gap-4">
+                {activeQuestion.options.map((option, idx) => {
+                  let badgeColor = "";
+                  let ringColor = "";
+                  let shape = "";
+                  if (idx === 0) { badgeColor = "bg-rose-500"; ringColor = "ring-rose-600/20"; shape = "▲"; }
+                  if (idx === 1) { badgeColor = "bg-blue-500"; ringColor = "ring-blue-600/20"; shape = "◆"; }
+                  if (idx === 2) { badgeColor = "bg-amber-500"; ringColor = "ring-amber-600/20"; shape = "●"; }
+                  if (idx === 3) { badgeColor = "bg-emerald-500"; ringColor = "ring-emerald-600/20"; shape = "■"; }
+
+                  return (
+                    <div 
+                      key={idx}
+                      className={`relative ${badgeColor} rounded-2xl p-5 flex flex-col justify-between shadow-md ring-1 ${ringColor} text-white min-h-[120px]`}
+                      id={`preview-option-${idx}`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="w-8 h-8 bg-white/20 rounded-lg flex items-center justify-center font-bold text-white text-md">
+                          {shape}
+                        </div>
+                        <span className="text-white/75 font-mono text-[10px] font-bold">OPCIÓN {String.fromCharCode(65 + idx)}</span>
+                      </div>
+                      <p className="text-lg sm:text-xl font-extrabold text-white mt-3 truncate">{option}</p>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-widest block">Progreso de Aula</span>
+                <span className="text-xs font-extrabold text-slate-600">PREGUNTA {currentQuestionIdx + 1} DE {totalQuestionsCount}</span>
+              </div>
+            </div>
+          )}
+
+          {/* 4. REVEAL ANSWER STATS */}
+          {isReveal && activeQuestion && revealData && (
+            <div className="flex-1 flex flex-col justify-between space-y-6 animate-fade-in" id="reveal-state-canvas">
+              
+              {/* Correct notification bar */}
+              <div className="bg-emerald-50 border border-emerald-150 p-4 rounded-2xl flex items-center gap-4 shadow-sm">
+                <div className="w-10 h-10 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0">
+                  <CheckCircle size={22} />
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold text-emerald-600 uppercase font-mono tracking-widest block">Respuesta Correcta de la Pregunta</span>
+                  <p className="text-sm font-bold text-slate-800">
+                    Opcion {String.fromCharCode(65 + revealData.correctOption)}: {activeQuestion.options[revealData.correctOption]}
+                  </p>
+                </div>
+              </div>
+
+              {/* Graphic report chart */}
+              <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm space-y-4">
+                <h4 className="text-xs uppercase font-extrabold text-slate-400 tracking-wider">Porcentajes de Conteo Local</h4>
+                
+                <div className="space-y-3.5">
+                  {[
+                    { val: revealData.stats.option0, title: activeQuestion.options[0], color: "bg-rose-500", shape: "▲" },
+                    { val: revealData.stats.option1, title: activeQuestion.options[1], color: "bg-blue-500", shape: "◆" },
+                    { val: revealData.stats.option2, title: activeQuestion.options[2], color: "bg-amber-500", shape: "●" },
+                    { val: revealData.stats.option3, title: activeQuestion.options[3], color: "bg-emerald-500", shape: "■" }
+                  ].map((item, idx) => {
+                    const totalAnswers = (revealData.stats.option0 + revealData.stats.option1 + revealData.stats.option2 + revealData.stats.option3) || 1;
+                    const pct = Math.round((item.val / totalAnswers) * 100);
+                    const isRight = idx === revealData.correctOption;
+
+                    return (
+                      <div key={idx} className="space-y-1">
+                        <div className="flex justify-between items-center text-xs font-bold text-slate-700">
+                          <span className="flex items-center gap-1.5 truncate max-w-[280px]">
+                            <span className="text-slate-400 font-mono">{item.shape}</span>
+                            <span className="truncate">{item.title}</span>
+                            {isRight && <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] px-1.5 rounded uppercase font-extrabold shrink-0">Ganadora</span>}
+                          </span>
+                          <span className="font-mono text-slate-500 flex-shrink-0">{item.val} votos ({pct}%)</span>
+                        </div>
+                        
+                        <div className="h-3 bg-slate-100 rounded-full overflow-hidden flex">
+                          <div 
+                            className={`h-full ${item.color} rounded-full transition-all duration-500`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Foot stats line */}
+              <div className="bg-slate-50 border border-slate-200 p-3 rounded-lg text-center text-xs font-bold text-slate-500 font-mono">
+                Presiona "Ver Tabla de Posiciones" para actualizar el score de pantalla.
+              </div>
+            </div>
+          )}
+
+          {/* 5. LEADERBOARD VIEW */}
+          {isLeaderboard && (
+            <div className="flex-1 flex flex-col justify-between space-y-6" id="leaderboard-state-canvas">
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm max-w-lg mx-auto w-full space-y-4">
+                
+                <div className="text-center space-y-1 pb-2 border-b border-slate-100">
+                  <Trophy className="text-amber-500 mx-auto" size={30} />
+                  <h3 className="text-lg font-bold text-slate-900 font-sans">Tabla de Posiciones del Aula</h3>
+                  <p className="text-xs text-slate-400">Puntaje acumulado general de los participantes</p>
+                </div>
+
+                <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                  {leaderboard.length === 0 ? (
+                    <div className="text-slate-400 text-center py-6 text-xs">Sin puntuaciones registradas aún.</div>
+                  ) : (
+                    leaderboard.slice(0, 5).map((p, idx) => (
+                      <div 
+                        key={p.id}
+                        className="flex justify-between items-center p-2.5 bg-slate-50 rounded-lg border border-slate-150"
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className={`w-6 h-6 rounded-full flex items-center justify-center font-mono font-bold text-[10px] ${
+                            idx === 0 ? "bg-amber-400 text-slate-900" :
+                            idx === 1 ? "bg-slate-300 text-slate-900" :
+                            idx === 2 ? "bg-amber-700 text-white" : "bg-slate-200 text-slate-600"
+                          }`}>
+                            {idx + 1}
+                          </span>
+                          <AvatarRenderer id={p.avatarId} size={24} className="shrink-0 bg-white p-0.5 rounded-full border border-slate-200 shadow-xs" />
+                          <span className="text-xs font-extrabold text-slate-800">{p.name}</span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          {p.streak > 1 && (
+                            <span className="bg-orange-50 text-orange-600 border border-orange-200 text-[9px] font-mono px-2 py-0.5 rounded-full uppercase font-extrabold">
+                              🔥 racha {p.streak}
+                            </span>
+                          )}
+                          <span className="text-xs font-mono font-extrabold text-indigo-600">{p.score} pts</span>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 6. PODIUM ENDED STATE */}
+          {isEnded && (
+            <div className="flex-1 flex flex-col space-y-6 overflow-y-auto pr-1" id="ended-state-canvas">
+              <div className="text-center space-y-1">
+                <Award className="text-indigo-600 mx-auto animate-bounce" size={40} />
+                <h3 className="text-2xl font-black text-slate-900 uppercase">¡Competencia Terminada!</h3>
+                <p className="text-xs text-slate-500 font-medium">Estadísticas docentes y podio de alumnos</p>
+              </div>
+
+              {/* Triple Podium Castle tower visuals */}
+              <div className="flex items-end justify-center gap-4 sm:gap-6 pt-2 pb-2 max-w-sm mx-auto w-full min-h-[140px]" id="podium-castle">
+                
+                {/* 2nd Place */}
+                {podium[1] && (
+                  <div className="flex flex-col items-center flex-1 shrink-0">
+                    <AvatarRenderer id={podium[1].avatarId || "cult_mariachi"} size={44} className="mb-1 rounded-full shadow border-2 border-slate-300" />
+                    <div className="text-center mb-1 max-w-[85px] truncate">
+                      <span className="text-xs font-bold text-slate-700 block truncate">{podium[1].name}</span>
+                      <span className="text-[10px] text-slate-400 font-mono">{podium[1].score} pts</span>
+                    </div>
+                    <div className="w-full bg-slate-200 border-t-2 border-slate-300 rounded-t-xl h-16 flex items-center justify-center">
+                      <span className="text-lg font-black text-slate-500">2</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 1st Place */}
+                {podium[0] && (
+                  <div className="flex flex-col items-center flex-1 shrink-0 scale-105">
+                    <span className="text-amber-500 text-sm mb-1">👑</span>
+                    <AvatarRenderer id={podium[0].avatarId || "cult_mariachi"} size={52} className="mb-1 rounded-full shadow-md border-2 border-amber-400" />
+                    <div className="text-center mb-1 max-w-[95px] truncate">
+                      <span className="text-xs font-black text-indigo-700 block truncate">{podium[0].name}</span>
+                      <span className="text-[10px] text-amber-600 font-mono font-bold">{podium[0].score} pts</span>
+                    </div>
+                    <div className="w-full bg-amber-50/60 border-t-2 border-amber-400 rounded-t-xl h-24 flex items-center justify-center relative shadow-sm">
+                      <span className="text-xl font-black text-amber-500">1</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 3rd Place */}
+                {podium[2] && (
+                  <div className="flex flex-col items-center flex-1 shrink-0">
+                    <AvatarRenderer id={podium[2].avatarId || "cult_mariachi"} size={40} className="mb-1 rounded-full shadow border-2 border-slate-300" />
+                    <div className="text-center mb-1 max-w-[85px] truncate">
+                      <span className="text-xs font-bold text-slate-700 block truncate">{podium[2].name}</span>
+                      <span className="text-[10px] text-slate-400 font-mono">{podium[2].score} pts</span>
+                    </div>
+                    <div className="w-full bg-slate-250 border-t-2 border-slate-355 rounded-t-xl h-12 flex items-center justify-center">
+                      <span className="text-base font-bold text-slate-400">3</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* INSTRUCTOR REPORT MODULE AND METRIC CARDS */}
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-4 shadow-inner" id="docente-reporte-modulo">
+                <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white shrink-0">
+                    <BarChart2 size={16} />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest leading-none">Módulo de Reporte del Profesor</h4>
+                    <p className="text-[10px] text-slate-500 font-medium font-sans mt-0.5">Análisis automático del rendimiento grupal</p>
+                  </div>
+                </div>
+
+                {loadingResults ? (
+                  <div className="flex flex-col items-center justify-center py-6 space-y-2">
+                    <RefreshCw size={20} className="text-indigo-600 animate-spin" />
+                    <span className="text-xs font-bold text-slate-500 font-mono animate-pulse">Analizando respuestas...</span>
+                  </div>
+                ) : resultsError ? (
+                  <div className="text-center py-2 text-xs font-bold text-rose-500 font-mono">
+                    ⚠️ Error al cargar métricas: {resultsError}
+                  </div>
+                ) : !gameResultsData ? (
+                  <div className="text-center py-2 text-xs font-bold text-slate-400 font-mono">
+                    Cargando reporte de partida...
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {/* Grid of 4 Cards */}
+                    <div className="grid grid-cols-2 gap-3" id="kpi-metric-cards">
+                      
+                      {/* CARD 1: Promedio grupal */}
+                      <div className="bg-white p-3 rounded-xl border border-slate-150 shadow-sm flex flex-col justify-between">
+                        <div className="flex items-center gap-1 text-indigo-600 mb-1">
+                          <CheckCircle size={13} />
+                          <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Promedio Grupal</span>
+                        </div>
+                        <div>
+                          <span className="text-lg font-bold text-slate-800 font-mono">{avgAccuracy}%</span>
+                          <span className="text-[9px] text-slate-500 block font-medium mt-0.5">aciertos totales</span>
+                        </div>
+                      </div>
+
+                      {/* CARD 2: Alumno Destacado */}
+                      <div className="bg-white p-3 rounded-xl border border-slate-150 shadow-sm flex flex-col justify-between">
+                        <div className="flex items-center gap-1 text-amber-500 mb-1">
+                          <Trophy size={13} />
+                          <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Mejor Alumno</span>
+                        </div>
+                        <div>
+                          <span className="text-xs font-black text-slate-800 truncate block">{topStudent.name}</span>
+                          <span className="text-[9px] text-slate-500 block font-mono font-bold mt-0.5">{topStudent.score} pts</span>
+                        </div>
+                      </div>
+
+                      {/* CARD 3: Pregunta Más Difícil */}
+                      <div className="bg-white p-3 rounded-xl border border-slate-150 shadow-sm flex flex-col justify-between col-span-2">
+                        <div className="flex items-center gap-1 text-rose-500 mb-1">
+                          <TrendingDown size={13} />
+                          <span className="text-[8px] font-black uppercase tracking-wider text-slate-400 font-sans">Pregunta más difícil del test</span>
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-bold text-slate-800 leading-tight line-clamp-2">{hardestQuestionText}</p>
+                          <span className="text-[8px] text-rose-500 font-mono font-bold block mt-1">baja efectividad</span>
+                        </div>
+                      </div>
+
+                      {/* CARD 4: Tema con Menor Desempeño */}
+                      <div className="bg-white p-3 rounded-xl border border-slate-150 shadow-sm flex flex-col justify-between col-span-2">
+                        <div className="flex items-center gap-1 text-slate-600 mb-1">
+                          <HelpCircle size={13} className="text-orange-500" />
+                          <span className="text-[8px] font-black uppercase tracking-wider text-slate-400">Tema menor desempeño</span>
+                        </div>
+                        <div className="flex justify-between items-end">
+                          <div className="max-w-[140px] truncate">
+                            <span className="text-[11px] font-black text-slate-800 uppercase block truncate">{lowestTopicName}</span>
+                            <span className="text-[8px] text-slate-400 font-medium block">necesita repaso</span>
+                          </div>
+                          <span className="text-[9px] font-extrabold bg-orange-50 text-orange-600 border border-orange-250 px-2 py-0.5 rounded-md font-mono shrink-0">{lowestTopicPct}% acierto</span>
+                        </div>
+                      </div>
+
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Core Screen bottom actions */}
+          <div className="pt-6 border-t border-slate-200 mt-6" id="panel-actions-wrapper">
+            {isLobby && (
+              <button
+                onClick={handleStartGame}
+                disabled={playersList.length === 0}
+                className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold text-sm tracking-wide shadow-md hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-1.5"
+                id="btn-lobby-go"
+              >
+                <Play size={15} />
+                <span>Iniciar Cuestionario en Aula</span>
+              </button>
+            )}
+
+            {isQuestion && (
+              <button
+                onClick={handleSkipQuestion}
+                className="w-full py-3 bg-white text-rose-500 border border-rose-250 rounded-xl font-bold text-xs tracking-widest uppercase hover:bg-rose-50 cursor-pointer"
+                id="btn-skip-active"
+              >
+                Saltar esta pregunta
+              </button>
+            )}
+
+            {isReveal && (
+              <button
+                onClick={handleShowLeaderboard}
+                className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold text-sm tracking-wide shadow-md hover:bg-slate-800 cursor-pointer"
+                id="btn-reveal-go"
+              >
+                Ver Tabla de Posiciones
+              </button>
+            )}
+
+            {isLeaderboard && (
+              <button
+                onClick={handleNextQuestion}
+                className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold text-sm tracking-wide shadow-md hover:bg-indigo-700 cursor-pointer"
+                id="btn-next-question-go"
+              >
+                {currentQuestionIdx + 1 < totalQuestionsCount ? "Siguiente Pregunta" : "Ver Resultados Finales"}
+              </button>
+            )}
+
+            {isEnded && (
+              <div className="space-y-3" id="ended-actions-wrapper">
+                <div className="bg-slate-50 border border-slate-200 p-3.5 rounded-2xl space-y-2">
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block text-center">Exportar Resultados Docente</span>
+                  
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <button
+                      onClick={handleExportExcel}
+                      disabled={loadingResults || !gameResultsData}
+                      className="py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl font-extrabold text-[10px] uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+                      id="btn-export-excel-complex"
+                    >
+                      <FileSpreadsheet size={13} />
+                      <span>Excel (.xlsx)</span>
+                    </button>
+
+                    <button
+                      onClick={handleExportCSV}
+                      disabled={loadingResults || !gameResultsData}
+                      className="py-3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl font-extrabold text-[10px] uppercase tracking-wider shadow-sm flex items-center justify-center gap-1.5 cursor-pointer"
+                      id="btn-export-csv-complex"
+                    >
+                      <Download size={13} />
+                      <span>CSV (.csv)</span>
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleCancelGame}
+                  className="w-full py-3.5 bg-white text-slate-800 border border-slate-300 rounded-xl font-bold text-xs tracking-wide uppercase hover:bg-slate-50 cursor-pointer flex items-center justify-center gap-1.5"
+                  id="btn-finish-ended"
+                >
+                  <LogOut size={13} className="text-slate-500" />
+                  <span>Cerrar sesión de juego</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Local Access Sidebar */}
+        <div className="w-full md:w-80 bg-white border-l border-slate-200 p-6 flex flex-col justify-between shadow-xl" id="console-sidebar">
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400 mb-4">Acceso de Alumno</h2>
+              <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-4 flex flex-col items-center justify-center aspect-square mb-4 shadow-inner">
+                {connInfo?.qrApp ? (
+                  <img
+                    src={connInfo.qrApp}
+                    alt="Lector de código"
+                    className="w-full h-full object-contain p-1"
+                  />
+                ) : (
+                  <svg width="120" height="120" viewBox="0 0 100 100" fill="none" stroke="currentColor" strokeWidth="2.5" className="text-slate-400 animate-pulse">
+                    <path d="M10 10h30v30h-30zM60 10h30v30h-30zM10 60h30v30h-30zM60 60h10v10h-10zM80 60h10v10h-10zM70 70h10v10h-10zM60 80h10v10h-10zM80 80h10v10h-10z"/>
+                  </svg>
+                )}
+              </div>
+              <div className="text-center space-y-1">
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Conectarse usando:</p>
+                <p className="text-sm font-mono font-bold text-indigo-700 bg-indigo-50 py-1.5 px-3 rounded-lg border border-indigo-100 select-all tracking-tight truncate">
+                  {connInfo?.preferredIP || "192.168.1.15"}
+                </p>
+                <p className="text-[10px] text-slate-400 font-semibold font-mono">Código PIN: <span className="text-indigo-600 font-bold">{activePin}</span></p>
+              </div>
+            </div>
+
+            {/* Quick rankings status panel */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Jugadores Conectados</h3>
+              <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
+                {playersList.length === 0 ? (
+                  <span className="text-[11px] font-bold text-slate-400 italic block py-4 text-center">Nadie se ha unido todavía</span>
+                ) : (
+                  playersList.slice(0, 4).map((pl, plIdx) => (
+                    <div 
+                      key={pl.id}
+                      className="flex justify-between items-center p-2 bg-slate-50 rounded-lg border border-slate-100"
+                    >
+                      <div className="flex items-center gap-2 max-w-[130px] truncate">
+                        <span className="text-[10px] font-bold text-slate-400">0{plIdx + 1}</span>
+                        <span className="text-xs font-extrabold text-slate-700 truncate">{pl.name}</span>
+                      </div>
+                      <span className="text-xs font-mono font-bold text-indigo-600 shrink-0">{pl.score} pts</span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-6 border-t border-slate-100">
+            <button 
+              onClick={handleCancelGame}
+              className="w-full py-2.5 bg-rose-50 text-rose-600 border border-rose-100 rounded-xl font-bold text-xs uppercase hover:bg-rose-100 cursor-pointer text-center"
+            >
+              Cancelar Partida
+            </button>
+          </div>
+        </div>
+
+      </div>
+    );
+  }
+
+  // STANDARD LOBBY PANEL / QUIZZES MANAGER
+  return (
+    <div className="space-y-6" id="teacher-dashboard-panel">
+      
+      {/* Visual top hero banner */}
+      <div className="bg-white border border-slate-200 p-6 sm:p-8 rounded-3xl flex flex-col md:flex-row justify-between items-start md:items-center gap-6 shadow-md shadow-slate-150/50">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5 text-indigo-600 font-mono text-xs uppercase font-extrabold tracking-widest">
+            <Tv size={14} className="animate-pulse" />
+            <span>Servidor Offline Listo</span>
+          </div>
+          <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Cuestionarios Disponibles</h2>
+          <p className="text-slate-500 text-xs sm:text-sm max-w-xl">
+            Inicia o edita cuestionarios de forma ágil, 100% offline sin consumir internet. La red local de la escuela se encargará de transmitir el juego.
+          </p>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 shrink-0 w-full md:w-auto">
+          <button
+            onClick={onImport}
+            className="flex items-center justify-center gap-2 bg-slate-50 border border-slate-200 text-slate-700 hover:bg-slate-100 hover:text-indigo-600 font-sans font-bold px-5 py-3 rounded-xl shadow-sm transition-all text-xs sm:text-sm cursor-pointer"
+            id="btn-import-quiz"
+          >
+            <ListPlus size={16} />
+            <span>Importar Reactivos</span>
+          </button>
+
+          <button
+            onClick={onCreateNew}
+            className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-xl font-bold font-sans shadow-md hover:shadow-lg transition-all active:scale-[0.98] text-xs sm:text-sm cursor-pointer"
+            id="btn-create-quiz"
+          >
+            <Plus size={18} />
+            <span>Crear Cuestionario</span>
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-xs sm:text-sm text-rose-700">
+          {error}
+        </div>
+      )}
+
+      {/* Grid of Quizzes */}
+      {loading ? (
+        <div className="text-slate-500 text-center py-20 flex flex-col items-center gap-2">
+          <RefreshCw size={24} className="animate-spin text-indigo-600" />
+          <p className="text-sm font-sans font-bold">Buscando cuestionarios guardados...</p>
+        </div>
+      ) : quizzes.length === 0 ? (
+        <div className="text-center py-24 bg-white rounded-3xl border border-slate-200 text-slate-500 space-y-4 shadow-sm">
+          <HelpCircle size={40} className="mx-auto text-slate-300" />
+          <div>
+            <h4 className="font-bold text-slate-800">No hay cuestionarios listos</h4>
+            <p className="text-xs text-slate-500 mt-1">Crea tu primer cuestionario de aula utilizando el botón de arriba.</p>
+          </div>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {quizzes.map((quiz) => (
+            <div
+              key={quiz.id}
+              className="group bg-white hover:bg-slate-50 border border-slate-200 hover:border-indigo-500/75 p-6 rounded-2xl flex flex-col justify-between gap-5 transition-all duration-150 shadow-sm"
+              id={`quiz-card-${quiz.id}`}
+            >
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  {quiz.questions && (
+                    <span className="bg-indigo-50 text-indigo-700 text-[10px] px-2.5 py-1 rounded-full font-sans font-extrabold uppercase border border-indigo-100">
+                      Preguntas: {quiz.questions.length}
+                    </span>
+                  )}
+                  <span className="text-[10px] text-slate-400 font-mono">
+                    {quiz.createdAt ? new Date(quiz.createdAt).toLocaleDateString() : ""}
+                  </span>
+                </div>
+
+                <h3 className="text-md sm:text-lg font-bold text-slate-900 font-sans tracking-tight leading-snug">
+                  {quiz.title}
+                </h3>
+                
+                {quiz.description && (
+                  <p className="text-xs sm:text-sm text-slate-500 line-clamp-2 leading-relaxed">
+                    {quiz.description}
+                  </p>
+                )}
+              </div>
+
+              {/* Card Actions */}
+              <div className="flex items-center justify-between border-t border-slate-100 pt-4 mt-2">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => onEdit(quiz)}
+                    className="flex items-center gap-1 text-slate-600 hover:text-indigo-600 bg-slate-50 p-2 rounded-lg text-xs font-semibold hover:bg-indigo-50 transition-colors border border-slate-200 cursor-pointer"
+                    title="Editar cuestionario"
+                    id={`btn-edit-quiz-${quiz.id}`}
+                  >
+                    <Edit3 size={13} />
+                    <span>Editar</span>
+                  </button>
+                  
+                  <button
+                    onClick={(e) => handleDeleteQuiz(quiz.id, e)}
+                    className="flex items-center gap-1 text-rose-600 hover:text-rose-700 hover:bg-rose-50 bg-slate-50 p-2 rounded-lg text-xs border border-slate-200 cursor-pointer"
+                    title="Eliminar cuestionario"
+                    id={`btn-delete-quiz-${quiz.id}`}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => handleHostGame(quiz.id)}
+                  className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl font-bold font-sans text-xs shadow-sm transition-transform active:scale-[0.98] cursor-pointer"
+                  id={`btn-host-quiz-${quiz.id}`}
+                >
+                  <Play size={12} className="fill-white text-white" />
+                  <span>Lanzar Partida</span>
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Connection Info footer box for teachers */}
+      {connInfo && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-indigo-50 border border-indigo-150 rounded-lg flex items-center justify-center text-indigo-600">
+              <Users size={20} />
+            </div>
+            <div>
+              <span className="text-[9px] text-slate-400 font-mono uppercase font-bold block">IP de Red del Servidor</span>
+              <span className="text-xs font-bold text-slate-700 font-mono">{connInfo.preferredIP}</span>
+            </div>
+          </div>
+
+          <div className="text-center sm:text-right">
+            <span className="text-[10px] text-slate-400 block font-sans">Los alumnos se conectan en su celular usando la URL:</span>
+            <span className="text-xs font-bold text-indigo-600 font-mono select-all bg-indigo-50 py-1 px-2.5 rounded border border-indigo-100">{connInfo.appUrl}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

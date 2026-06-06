@@ -1,0 +1,126 @@
+[
+  {
+    "id": "q1",
+    "title": "Inventos y Tecnología",
+    "description": "Un cuestionario divertido sobre computadoras, historia de la tecnología de consumo y programación.",
+    "createdAt": "2026-06-06T01:00:00.000Z",
+    "questions": [
+      {
+        "id": "q1_1",
+        "text": "¿Cuál fue el primer navegador web ampliamente popular lanzado en 1993?",
+        "options": [
+          "Internet Explorer",
+          "NCSA Mosaic",
+          "Netscape Navigator",
+          "Opera"
+        ],
+        "correctOption": 1,
+        "timeLimit": 20
+      },
+      {
+        "id": "q1_2",
+        "text": "¿Qué significan las siglas 'HTML'?",
+        "options": [
+          "HyperText Markup Language",
+          "HighText Machine Language",
+          "HyperTransfer Modern Link",
+          "Home Tool Markup Language"
+        ],
+        "correctOption": 0,
+        "timeLimit": 15
+      },
+      {
+        "id": "q1_3",
+        "text": "¿En qué año se lanzó el primer iPhone, revolucionando la telefonía móvil?",
+        "options": [
+          "2005",
+          "2006",
+          "2007",
+          "2008"
+        ],
+        "correctOption": 2,
+        "timeLimit": 20
+      },
+      {
+        "id": "q1_4",
+        "text": "¿Cuál es el principal componente de una computadora encargado de realizar cálculos y procesar instrucciones?",
+        "options": [
+          "Memoria RAM",
+          "Disco Duro",
+          "Placa Madre",
+          "Unidad Central de Procesamiento (CPU)"
+        ],
+        "correctOption": 3,
+        "timeLimit": 15
+      },
+      {
+        "id": "q1_5",
+        "text": "¿Qué lenguaje de programación es ampliamente conocido como el lenguaje de la web para interactividad?",
+        "options": [
+          "Python",
+          "Java",
+          "JavaScript",
+          "C++"
+        ],
+        "correctOption": 2,
+        "timeLimit": 20
+      }
+    ]
+  },
+  {
+    "id": "q2",
+    "title": "Ciencia y Naturaleza increíble",
+    "description": "Pon a prueba tus conocimientos sobre el espacio exterior, nuestro planeta y fenómenos divertidos de la física.",
+    "createdAt": "2026-06-06T01:01:00.000Z",
+    "questions": [
+      {
+        "id": "q2_1",
+        "text": "¿Cuál es el planeta más grande de nuestro sistema solar?",
+        "options": [
+          "Saturno",
+          "Júpiter",
+          "Neptuno",
+          "La Tierra"
+        ],
+        "correctOption": 1,
+        "timeLimit": 15
+      },
+      {
+        "id": "q2_2",
+        "text": "¿Qué gas respiran las plantas y absorben para realizar la fotosíntesis?",
+        "options": [
+          "Oxígeno",
+          "Nitrógeno",
+          "Dióxido de Carbono (CO2)",
+          "Helio"
+        ],
+        "correctOption": 2,
+        "timeLimit": 15
+      },
+      {
+        "id": "q2_3",
+        "text": "¿A qué velocidad viaja aproximadamente la luz en el vacío?",
+        "options": [
+          "300,000 kilómetros por segundo",
+          "150,000 metros por hora",
+          "1,000,000 kilómetros por minuto",
+          "340 metros por segundo"
+        ],
+        "correctOption": 0,
+        "timeLimit": 20
+      },
+      {
+        "id": "q2_4",
+        "text": "¿Qué tipo de energía se almacena y libera durante una reacción química o en alimentos?",
+        "options": [
+          "Energía Cinética",
+          "Energía Térmica",
+          "Energía Química",
+          "Energía Nuclear"
+        ],
+        "correctOption": 2,
+        "timeLimit": 20
+      }
+    ]
+  }
+]

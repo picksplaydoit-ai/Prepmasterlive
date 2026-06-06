@@ -1,0 +1,6 @@
+{
+  "name": "Prepmaster Live",
+  "description": "Una aplicación de evaluación y aprendizaje interactivo en tiempo real para escuelas que funciona en red local, diseñada para entornos con conectividad limitada, con soporte para celulares mediante códigos QR y Socket.io.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
