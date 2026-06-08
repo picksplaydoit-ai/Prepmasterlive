@@ -463,6 +463,19 @@ app.get("/api/ip", async (req, res) => {
   }
 });
 
+// Network info API returning localIp, port, and localUrl (Prepmaster Live 2.1.2)
+app.get("/api/network-info", (req, res) => {
+  const ips = getLocalIPs().filter(ip => ip !== "localhost" && ip !== "127.0.0.1");
+  const localIp = ips[0] || "";
+  const port = PORT || 3000;
+  const localUrl = localIp ? `http://${localIp}:${port}` : "";
+  res.json({
+    localIp,
+    port,
+    localUrl
+  });
+});
+
 // Network Diagnostic API for Prepmaster 2.0.1
 app.get("/api/network-diagnostic", async (req, res) => {
   const interfaces = os.networkInterfaces();

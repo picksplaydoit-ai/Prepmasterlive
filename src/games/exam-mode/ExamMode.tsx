@@ -43,19 +43,52 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
   const [soundActive, setSoundActive] = useState(getSoundsEnabled());
   const [timerElapsed, setTimerElapsed] = useState(0);
   
-  // Direct Join states (2.1.1)
+  // Direct Join states (2.1.2)
+  const [networkInfo, setNetworkInfo] = useState<{ localIp: string; port: number; localUrl: string } | null>(null);
+  const [joinUrlUsed, setJoinUrlUsed] = useState<string>("");
+  const [isIpDetected, setIsIpDetected] = useState<boolean>(true);
   const [sessionQrUrl, setSessionQrUrl] = useState<string>("");
   const [copiedPin, setCopiedPin] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
 
   useEffect(() => {
-    const joinUrl = `${window.location.origin}/join?pin=${pin}&game=exam_mode`;
-    QRCode.toDataURL(joinUrl, { width: 405, margin: 1 }, (err, url) => {
+    fetch("/api/network-info")
+      .then(res => {
+        if (res.ok) return res.json();
+        throw new Error("Network API failed");
+      })
+      .then(data => {
+        setNetworkInfo(data);
+      })
+      .catch(err => {
+        console.error("Error fetching network-info in exam mode:", err);
+      });
+  }, []);
+
+  useEffect(() => {
+    let url = "";
+    if (networkInfo && networkInfo.localIp) {
+      url = `http://${networkInfo.localIp}:${networkInfo.port}/join?pin=${pin}&game=exam_mode`;
+      setIsIpDetected(true);
+    } else {
+      const host = window.location.hostname;
+      if (host && host !== "localhost" && host !== "127.0.0.1") {
+        url = `${window.location.origin}/join?pin=${pin}&game=exam_mode`;
+        setIsIpDetected(true);
+      } else {
+        setIsIpDetected(false);
+        url = `http://[REVISA_CONEXION_WIFI]:3000/join?pin=${pin}&game=exam_mode`;
+      }
+    }
+    setJoinUrlUsed(url);
+
+    QRCode.toDataURL(url, { width: 405, margin: 1 }, (err, qrUrl) => {
       if (!err) {
-        setSessionQrUrl(url);
+        setSessionQrUrl(qrUrl);
       }
     });
-  }, [pin]);
+  }, [pin, networkInfo]);
+
   const [examStarted, setExamStarted] = useState(false);
   const [examStatus, setExamStatus] = useState<'lobby' | 'ongoing' | 'completed'>('lobby');
 
@@ -343,20 +376,27 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
               </div>
 
               <div className="text-center space-y-2 w-full">
-                <p className="text-[9px] font-mono text-indigo-700 bg-indigo-50/50 border border-indigo-100/60 py-1 px-2.5 rounded-lg select-all tracking-tight truncate max-w-full">
-                  {`${window.location.origin}/join?pin=${pin}&game=exam_mode`}
+                <p className="text-[9px] font-mono text-indigo-700 bg-indigo-50/50 border border-indigo-100/60 py-1 px-2.5 rounded-lg select-all tracking-tight truncate max-w-full" id="exam-qr-url-text">
+                  {joinUrlUsed}
                 </p>
                 <button
                   onClick={() => {
-                    navigator.clipboard.writeText(`${window.location.origin}/join?pin=${pin}&game=exam_mode`);
+                    navigator.clipboard.writeText(joinUrlUsed);
                     setCopiedUrl(true);
                     setTimeout(() => setCopiedUrl(false), 2000);
                   }}
                   className="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 text-slate-600 hover:bg-slate-100 font-sans font-bold px-2.5 py-1 rounded-lg transition-all text-[10px] cursor-pointer"
+                  id="exam-qr-url-copy-btn"
                 >
                   <Copy size={10} />
                   <span>{copiedUrl ? "¡Copiado!" : "Copiar enlace"}</span>
                 </button>
+
+                {!isIpDetected && (
+                  <div className="bg-rose-50 border border-rose-200 text-rose-850 rounded-xl p-3 text-[10.5px] font-bold text-center mt-3 leading-normal" id="exam-wifi-warning-banner">
+                    ⚠️ No se detectó IP local. Revisa tu conexión WiFi.
+                  </div>
+                )}
               </div>
             </div>
 

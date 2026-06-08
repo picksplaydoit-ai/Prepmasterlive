@@ -31,6 +31,12 @@ interface ConnectionInfo {
   qrApp: string;
 }
 
+interface NetworkInfo {
+  localIp: string;
+  port: number;
+  localUrl: string;
+}
+
 export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: TeacherDashboardProps) {
   const [quizzes, setQuizzes] = useState<Questionnaire[]>([]);
   const [loading, setLoading] = useState(true);
@@ -44,6 +50,7 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
   
   // Connection details retrieved from server
   const [connInfo, setConnInfo] = useState<ConnectionInfo | null>(null);
+  const [networkInfo, setNetworkInfo] = useState<NetworkInfo | null>(null);
 
   // Active game states
   const [activePin, setActivePin] = useState<string | null>(null);
@@ -94,21 +101,38 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
   // Clipboard utility
   const [copied, setCopied] = useState(false);
 
-  // Dynamic Session QR URL state (2.1.1)
+  // Dynamic Session QR URL state (2.1.2)
   const [sessionQrUrl, setSessionQrUrl] = useState<string>("");
+  const [joinUrlUsed, setJoinUrlUsed] = useState<string>("");
+  const [isIpDetected, setIsIpDetected] = useState<boolean>(true);
   const [copiedPin, setCopiedPin] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
 
   useEffect(() => {
     if (activePin && activeGameType) {
-      const joinUrl = `${window.location.origin}/join?pin=${activePin}&game=${activeGameType}`;
-      QRCode.toDataURL(joinUrl, { width: 405, margin: 1 }, (err, url) => {
+      let url = "";
+      if (networkInfo && networkInfo.localIp) {
+        url = `http://${networkInfo.localIp}:${networkInfo.port}/join?pin=${activePin}&game=${activeGameType}`;
+        setIsIpDetected(true);
+      } else {
+        const host = window.location.hostname;
+        if (host && host !== "localhost" && host !== "127.0.0.1") {
+          url = `${window.location.origin}/join?pin=${activePin}&game=${activeGameType}`;
+          setIsIpDetected(true);
+        } else {
+          setIsIpDetected(false);
+          url = `http://[REVISA_CONEXION_WIFI]:3000/join?pin=${activePin}&game=${activeGameType}`;
+        }
+      }
+      setJoinUrlUsed(url);
+
+      QRCode.toDataURL(url, { width: 405, margin: 1 }, (err, qrUrl) => {
         if (!err) {
-          setSessionQrUrl(url);
+          setSessionQrUrl(qrUrl);
         }
       });
     }
-  }, [activePin, activeGameType]);
+  }, [activePin, activeGameType, networkInfo]);
 
   // New states for match results and export metrics
   const [gameResultsData, setGameResultsData] = useState<any | null>(null);
@@ -197,6 +221,15 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
       }
     } catch (err) {
       console.error("Error al obtener la información de IP local:", err);
+    }
+    try {
+      const res = await fetch("/api/network-info");
+      if (res.ok) {
+        const data = await res.json();
+        setNetworkInfo(data);
+      }
+    } catch (err) {
+      console.error("Error al obtener /api/network-info:", err);
     }
   };
 
@@ -973,18 +1006,19 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
                     <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl flex items-center justify-between text-xs font-mono">
                       <div>
                         <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Dirección Local:</span>
-                        <span className="font-bold text-indigo-700 truncate block select-all">
-                          {connInfo?.appUrl || `${window.location.origin}`}
+                        <span className="font-bold text-indigo-700 truncate block select-all" id="lobby-local-dir-text">
+                          {networkInfo?.localUrl || connInfo?.appUrl || `${window.location.origin}`}
                         </span>
                       </div>
                       <button
                         onClick={() => {
-                          const url = connInfo?.appUrl || `${window.location.origin}`;
+                          const url = networkInfo?.localUrl || connInfo?.appUrl || `${window.location.origin}`;
                           navigator.clipboard.writeText(url);
                           setCopiedUrl(true);
                           setTimeout(() => setCopiedUrl(false), 2000);
                         }}
                         className="text-[10px] font-bold uppercase tracking-wider text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-lg transition-all"
+                        id="lobby-local-dir-copy-btn"
                       >
                         {copiedUrl ? "¡Listo!" : "Copiar"}
                       </button>
@@ -1078,20 +1112,27 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
                     </div>
 
                     <div className="text-center space-y-1.5 w-full">
-                      <p className="text-[9px] font-mono text-indigo-700 bg-indigo-50/50 border border-indigo-100/60 py-1 px-2 rounded-lg select-all tracking-tight truncate max-w-full">
-                        {`${window.location.origin}/join?pin=${activePin}&game=${activeGameType}`}
+                      <p className="text-[9px] font-mono text-indigo-700 bg-indigo-50/50 border border-indigo-100/60 py-1 px-2 rounded-lg select-all tracking-tight truncate max-w-full" id="lobby-qr-url-text">
+                        {joinUrlUsed}
                       </p>
                       <button
                         onClick={() => {
-                          navigator.clipboard.writeText(`${window.location.origin}/join?pin=${activePin}&game=${activeGameType}`);
+                          navigator.clipboard.writeText(joinUrlUsed);
                           setCopied(true);
                           setTimeout(() => setCopied(false), 2000);
                         }}
                         className="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 hover:bg-slate-100 text-slate-600 transition-all font-sans font-bold px-2.5 py-1 rounded-lg text-[10px] cursor-pointer shadow-xs"
+                        id="lobby-qr-url-copy-btn"
                       >
                         <Clipboard size={10} />
                         <span>{copied ? "¡Copiado!" : "Copiar enlace"}</span>
                       </button>
+
+                      {!isIpDetected && (
+                        <div className="bg-rose-50 border border-rose-200 text-rose-850 rounded-xl p-3 text-[10.5px] font-bold text-center mt-3 leading-normal animate-pulse" id="lobby-wifi-warning-banner">
+                          ⚠️ No se detectó IP local. Revisa tu conexión WiFi.
+                        </div>
+                      )}
                     </div>
                   </div>
 
