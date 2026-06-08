@@ -922,7 +922,8 @@ app.get("/api/session-results/:pin", (req, res) => {
       answersHistory: session.answersHistory || [],
       gameMode: session.gameMode || "individual",
       teams: session.teams || [],
-      examProgress: (session as any).examProgress || {}
+      examProgress: (session as any).examProgress || {},
+      timeLimitMinutes: (session as any).timeLimitMinutes || null
     });
     return;
   }
@@ -1872,6 +1873,8 @@ io.on("connection", (socket: Socket) => {
         (session as any).examQuestions = payload.questions || [];
         (session as any).examStarted = true;
         (session as any).examStatus = "ongoing";
+        (session as any).timeLimitMinutes = payload.timeLimitMinutes || null;
+        (session as any).examStartTime = Date.now();
         if (!(session as any).examProgress) {
           (session as any).examProgress = {};
         }
@@ -1927,6 +1930,7 @@ io.on("connection", (socket: Socket) => {
           timeTakenSeconds,
           status,
           answers,
+          autoSubmitted: !!payload.autoSubmitted,
           lastUpdated: Date.now()
         };
 
@@ -1941,7 +1945,8 @@ io.on("connection", (socket: Socket) => {
           socketId: socket.id,
           playerId: studentPlayerId,
           status,
-          percentage
+          percentage,
+          autoSubmitted: !!payload.autoSubmitted
         });
         return;
       }
@@ -2280,13 +2285,15 @@ io.on("connection", (socket: Socket) => {
           examQuestions: (session as any).examQuestions || session.questions || [],
           examAnswers: pProgress ? pProgress.answers : {},
           examCompleted: pProgress ? pProgress.completed : false,
-          examTimeStart: pProgress ? Date.now() - (pProgress.timeTakenSeconds * 1000) : Date.now(),
+          examTimeStart: pProgress ? Date.now() - (pProgress.timeTakenSeconds * 1000) : ((session as any).examStartTime || Date.now()),
+          timeLimitMinutes: (session as any).timeLimitMinutes || null,
           solvedCount: pProgress ? pProgress.solvedCount : 0,
           correctCount: pProgress ? pProgress.correctCount : 0,
           incorrectCount: pProgress ? pProgress.incorrectCount : 0,
           percentage: pProgress ? pProgress.percentage : 0,
           timeTakenSeconds: pProgress ? pProgress.timeTakenSeconds : 0,
-          status: pProgress ? pProgress.status : "Pendiente"
+          status: pProgress ? pProgress.status : "Pendiente",
+          autoSubmitted: pProgress ? !!pProgress.autoSubmitted : false
         };
       }
 
@@ -2411,13 +2418,15 @@ io.on("connection", (socket: Socket) => {
         examQuestions: (session as any).examQuestions || session.questions || [],
         examAnswers: pProgress ? pProgress.answers : {},
         examCompleted: pProgress ? pProgress.completed : false,
-        examTimeStart: pProgress ? Date.now() - (pProgress.timeTakenSeconds * 1000) : Date.now(),
+        examTimeStart: pProgress ? Date.now() - (pProgress.timeTakenSeconds * 1000) : ((session as any).examStartTime || Date.now()),
+        timeLimitMinutes: (session as any).timeLimitMinutes || null,
         solvedCount: pProgress ? pProgress.solvedCount : 0,
         correctCount: pProgress ? pProgress.correctCount : 0,
         incorrectCount: pProgress ? pProgress.incorrectCount : 0,
         percentage: pProgress ? pProgress.percentage : 0,
         timeTakenSeconds: pProgress ? pProgress.timeTakenSeconds : 0,
-        status: pProgress ? pProgress.status : "Pendiente"
+        status: pProgress ? pProgress.status : "Pendiente",
+        autoSubmitted: pProgress ? !!pProgress.autoSubmitted : false
       };
     }
 

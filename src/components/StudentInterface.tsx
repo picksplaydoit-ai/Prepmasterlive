@@ -85,6 +85,8 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
   const [examTimeStart, setExamTimeStart] = useState<number>(0);
   const [examCompleted, setExamCompleted] = useState(false);
   const [examTimeTaken, setExamTimeTaken] = useState<number | null>(null);
+  const [examTimeLimitMinutes, setExamTimeLimitMinutes] = useState<number | null>(null);
+  const [examRemainingSeconds, setExamRemainingSeconds] = useState<number | null>(null);
 
   // Active question details for student view
   const [activeQuestion, setActiveQuestion] = useState<{
@@ -162,6 +164,70 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
     };
   }, [joined]);
 
+  // Trigger automatic exam submit when time is up
+  const triggerExamAutoSubmit = () => {
+    // Determine the duration
+    const allowedSecs = examTimeLimitMinutes ? examTimeLimitMinutes * 60 : 0;
+    
+    // Set completed
+    setExamCompleted(true);
+    setExamTimeTaken(allowedSecs);
+
+    let correctAttempts = 0;
+    let incorrectAttempts = 0;
+    examQuestions.forEach((q, index) => {
+      const optionChosen = examAnswers[index];
+      if (optionChosen === undefined) return;
+      if (optionChosen === q.correctOption) {
+        correctAttempts++;
+      } else {
+        incorrectAttempts++;
+      }
+    });
+
+    const studentPlayerId = playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player";
+    const studentName = name || localStorage.getItem("prepmaster_name") || "Alumno";
+
+    socket.emit("game:player-message", {
+      pin: joinedPin,
+      event: "exam:player-progress",
+      playerId: studentPlayerId,
+      name: studentName,
+      solvedCount: Object.keys(examAnswers).length,
+      correctCount: correctAttempts,
+      incorrectCount: incorrectAttempts,
+      completed: true,
+      timeTakenSeconds: allowedSecs,
+      answers: examAnswers,
+      totalQuestions: examQuestions.length,
+      autoSubmitted: true
+    });
+  };
+
+  useEffect(() => {
+    if (activeGameType !== "exam" || examCompleted || !examTimeLimitMinutes || !examTimeStart) {
+      setExamRemainingSeconds(null);
+      return;
+    }
+
+    const updateTimer = () => {
+      const allowedSecs = examTimeLimitMinutes * 60;
+      const elapsedSecs = Math.round((Date.now() - examTimeStart) / 1000);
+      const rem = Math.max(0, allowedSecs - elapsedSecs);
+      setExamRemainingSeconds(rem);
+
+      if (rem <= 0) {
+        clearInterval(timerInterval);
+        triggerExamAutoSubmit();
+      }
+    };
+
+    updateTimer();
+    const timerInterval = setInterval(updateTimer, 1000);
+
+    return () => clearInterval(timerInterval);
+  }, [activeGameType, examCompleted, examTimeLimitMinutes, examTimeStart, examAnswers, examQuestions, playerInfo, name, joinedPin]);
+
   // Set up socket listeners for student activities
   useEffect(() => {
     socket.on("player:join-success", (data: { 
@@ -196,6 +262,12 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
         setExamTimeStart(estate.examTimeStart || Date.now());
         if (estate.examCompleted) {
           setExamTimeTaken(estate.timeTakenSeconds || 0);
+        }
+
+        if (estate.timeLimitMinutes) {
+          setExamTimeLimitMinutes(estate.timeLimitMinutes);
+        } else {
+          setExamTimeLimitMinutes(null);
         }
 
         const answeredCount = Object.keys(estate.examAnswers || {}).length;
@@ -293,7 +365,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
     });
 
     // Exam Mode Listeners
-    socket.on("exam:start", (data: { totalQuestions: number; questions: any[] }) => {
+    socket.on("exam:start", (data: { totalQuestions: number; questions: any[]; timeLimitMinutes?: number | null }) => {
       setActiveGameType("exam");
       const sId = playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player";
       const shuffled = deterministicShuffle(data.questions || [], sId);
@@ -303,6 +375,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       setExamTimeStart(Date.now());
       setExamCompleted(false);
       setExamTimeTaken(null);
+      setExamTimeLimitMinutes(data.timeLimitMinutes || null);
     });
 
     socket.on("exam:ended", () => {
@@ -1227,9 +1300,29 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
               <span className="font-mono font-bold">Reactivo {examCurrentQuestionIndex + 1} de {examQuestions.length}</span>
             </div>
 
-            <p className="text-sm font-black text-slate-900 leading-normal font-sans text-left">
-              {currentQ.text}
-            </p>
+            {examRemainingSeconds !== null && (
+              <div className={`p-3 rounded-2xl border text-center font-sans tracking-wide font-black flex items-center justify-center gap-2 animate-pulse ${
+                examRemainingSeconds <= 60
+                  ? "bg-rose-50 border-rose-200 text-rose-700 font-extrabold animate-bounce"
+                  : examRemainingSeconds <= 300
+                    ? "bg-amber-50 border-amber-200 text-amber-700 font-bold"
+                    : "bg-indigo-50 border-indigo-100 text-indigo-700 font-semibold"
+              }`} id="student-exam-timer-bar">
+                <span className="text-xs">⏱️ Tiempo restante:</span>
+                <span className="font-mono text-sm leading-none font-black">
+                  {Math.floor(examRemainingSeconds / 60).toString().padStart(2, '0')}:{Math.floor(examRemainingSeconds % 60).toString().padStart(2, '0')}
+                </span>
+              </div>
+            )}
+
+            <div className="text-left space-y-2">
+              <span className="text-[10px] font-black uppercase tracking-wider text-rose-600 bg-rose-50 border border-rose-100 px-2.5 py-1 rounded inline-block font-mono">
+                Reactivo {examCurrentQuestionIndex + 1}
+              </span>
+              <p className="text-sm font-black text-slate-900 leading-normal font-sans pt-1">
+                {currentQ.text}
+              </p>
+            </div>
 
             <div className="space-y-2.5 pt-1">
               {currentQ.options.map((opt: string, idx: number) => {

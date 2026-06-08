@@ -38,6 +38,7 @@ interface StudentExamProgress {
   timeTakenSeconds: number;
   answers?: Record<number, number>;
   status?: string;
+  autoSubmitted?: boolean;
 }
 
 export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, connInfo }: ExamModeProps) {
@@ -45,6 +46,9 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
   const [examProgress, setExamProgress] = useState<Record<string, StudentExamProgress>>({});
   const [soundActive, setSoundActive] = useState(getSoundsEnabled());
   const [timerElapsed, setTimerElapsed] = useState(0);
+  const [examDurationLimit, setExamDurationLimit] = useState<number | null>(null);
+  const [isCustomTimeLimit, setIsCustomTimeLimit] = useState<boolean>(false);
+  const [customMinutes, setCustomMinutes] = useState<string>("");
   
   // Direct Join states (2.1.2)
   const [networkInfo, setNetworkInfo] = useState<{ localIp: string; port: number; localUrl: string } | null>(null);
@@ -99,10 +103,18 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
   useEffect(() => {
     if (examStatus !== 'ongoing') return;
     const interval = setInterval(() => {
-      setTimerElapsed(prev => prev + 1);
+      setTimerElapsed(prev => {
+        const nextVal = prev + 1;
+        if (examDurationLimit && nextVal >= examDurationLimit * 60) {
+          clearInterval(interval);
+          handleEndExam();
+          return examDurationLimit * 60;
+        }
+        return nextVal;
+      });
     }, 1000);
     return () => clearInterval(interval);
-  }, [examStatus]);
+  }, [examStatus, examDurationLimit]);
 
   // Rehydrate exist progress on mount
   useEffect(() => {
@@ -112,46 +124,52 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
         throw new Error("Failed to fetch session progress");
       })
       .then(data => {
-        if (data && data.examProgress) {
-          setExamProgress(prev => {
-            const nextProgress = { ...prev };
-            // Copy loaded progress from server
-            Object.keys(data.examProgress).forEach(pId => {
-              const item = data.examProgress[pId];
-              nextProgress[pId] = {
-                playerId: pId,
-                socketId: item.socketId || "",
-                name: item.name || "Alumno",
-                solvedCount: item.solvedCount || 0,
-                correctCount: item.correctCount || 0,
-                incorrectCount: item.incorrectCount || 0,
-                percentage: item.percentage || 0,
-                completed: item.completed || false,
-                timeTakenSeconds: item.timeTakenSeconds || 0,
-                answers: item.answers,
-                status: item.status || "Pendiente"
-              };
-            });
-            // Ensure any live players in lobby are also represented
-            players.forEach(p => {
-              const idToUse = p.playerId || p.id;
-              if (!nextProgress[idToUse]) {
-                nextProgress[idToUse] = {
-                  playerId: idToUse,
-                  socketId: p.id,
-                  name: p.name,
-                  solvedCount: 0,
-                  correctCount: 0,
-                  incorrectCount: 0,
-                  percentage: 0,
-                  completed: false,
-                  timeTakenSeconds: 0,
-                  status: "Pendiente"
+        if (data) {
+          if (data.timeLimitMinutes) {
+            setExamDurationLimit(data.timeLimitMinutes);
+          }
+          if (data.examProgress) {
+            setExamProgress(prev => {
+              const nextProgress = { ...prev };
+              // Copy loaded progress from server
+              Object.keys(data.examProgress).forEach(pId => {
+                const item = data.examProgress[pId];
+                nextProgress[pId] = {
+                  playerId: pId,
+                  socketId: item.socketId || "",
+                  name: item.name || "Alumno",
+                  solvedCount: item.solvedCount || 0,
+                  correctCount: item.correctCount || 0,
+                  incorrectCount: item.incorrectCount || 0,
+                  percentage: item.percentage || 0,
+                  completed: item.completed || false,
+                  timeTakenSeconds: item.timeTakenSeconds || 0,
+                  answers: item.answers,
+                  status: item.status || "Pendiente",
+                  autoSubmitted: item.autoSubmitted || false
                 };
-              }
+              });
+              // Ensure any live players in lobby are also represented
+              players.forEach(p => {
+                const idToUse = p.playerId || p.id;
+                if (!nextProgress[idToUse]) {
+                  nextProgress[idToUse] = {
+                    playerId: idToUse,
+                    socketId: p.id,
+                    name: p.name,
+                    solvedCount: 0,
+                    correctCount: 0,
+                    incorrectCount: 0,
+                    percentage: 0,
+                    completed: false,
+                    timeTakenSeconds: 0,
+                    status: "Pendiente"
+                  };
+                }
+              });
+              return nextProgress;
             });
-            return nextProgress;
-          });
+          }
         }
       })
       .catch(err => {
@@ -231,7 +249,8 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
             completed: data.completed,
             timeTakenSeconds: data.timeTakenSeconds,
             answers: data.answers || (student ? student.answers : {}),
-            status: solvedStatus
+            status: solvedStatus,
+            autoSubmitted: (data as any).autoSubmitted || false
           }
         };
 
@@ -250,7 +269,7 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
     };
   }, [quiz]);
 
-  const handleStartExam = () => {
+  function handleStartExam() {
     setExamStatus('ongoing');
     setExamStarted(true);
     playGameSound("inicio");
@@ -260,11 +279,12 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
       pin,
       event: "exam:start",
       totalQuestions: quiz.questions.length,
-      questions: quiz.questions
+      questions: quiz.questions,
+      timeLimitMinutes: examDurationLimit
     });
-  };
+  }
 
-  const handleEndExam = () => {
+  function handleEndExam() {
     setExamStatus('completed');
     playGameSound("finalizacion");
 
@@ -273,7 +293,7 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
       pin,
       event: "exam:ended"
     });
-  };
+  }
 
   const handleToggleSound = () => {
     setSoundsEnabled(!soundActive);
@@ -298,6 +318,16 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
         currentStatus = "En progreso";
       }
 
+      // Determine "Estado por tiempo"
+      let estadoPorTiempo = "Pendiente";
+      if (student.completed || student.status === "Terminado") {
+        estadoPorTiempo = student.autoSubmitted ? "Autoentregado por tiempo agotado" : "Entregado";
+      } else if (student.solvedCount > 0 || student.status === "En progreso") {
+        estadoPorTiempo = "En progreso";
+      }
+
+      const infoLimite = examDurationLimit ? `${examDurationLimit} minutos` : "Sin límite";
+
       return {
         "No.": idx + 1,
         "Nombre de Alumno": student.name,
@@ -306,7 +336,10 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
         "Errores (Incorrectas)": student.incorrectCount,
         "Calificación (%)": `${student.percentage}%`,
         "Tiempo de Resolución": `${student.timeTakenSeconds}s`,
-        "Estado": currentStatus
+        "Estado": currentStatus,
+        "Tiempo límite del examen": infoLimite,
+        "Tiempo usado": `${student.timeTakenSeconds}s`,
+        "Estado por tiempo": estadoPorTiempo
       };
     });
 
@@ -322,6 +355,8 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
 
   const totalRegistered = Object.keys(examProgress).length;
   const totalCompleted = (Object.values(examProgress) as StudentExamProgress[]).filter(p => p.completed).length;
+  const totalEnProgreso = (Object.values(examProgress) as StudentExamProgress[]).filter(p => !p.completed && p.solvedCount > 0).length;
+  const totalPendientes = (Object.values(examProgress) as StudentExamProgress[]).filter(p => !p.completed && p.solvedCount === 0).length;
 
   if (examStatus === 'lobby') {
     return (
@@ -384,6 +419,91 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
               </div>
               <div className="absolute top-1/2 right-4 -translate-y-1/2 opacity-20 pointer-events-none scale-150">
                 <Laptop size={120} className="text-white" />
+              </div>
+            </div>
+
+            {/* Configuration card */}
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 space-y-4 shadow-xs text-left" id="exam-config-block">
+              <div className="flex items-center gap-2 border-b border-slate-100 pb-3">
+                <ClipboardCheck className="text-indigo-600" size={18} />
+                <h3 className="text-sm font-black text-slate-800 tracking-tight">Configuración de Tiempo Límite</h3>
+              </div>
+              
+              <div className="space-y-3">
+                <label className="text-[11px] font-black text-slate-500 uppercase tracking-wide block">Tiempo límite del examen</label>
+                
+                {/* Quick select buttons */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                  {[
+                    { label: "Sin límite", value: null },
+                    { label: "10 min", value: 10 },
+                    { label: "15 min", value: 15 },
+                    { label: "20 min", value: 20 },
+                    { label: "30 min", value: 30 },
+                    { label: "45 min", value: 45 },
+                    { label: "60 min", value: 60 }
+                  ].map((opt) => {
+                    const isSelected = examDurationLimit === opt.value && !isCustomTimeLimit;
+                    return (
+                      <button
+                        key={opt.label || 'sin-limite'}
+                        type="button"
+                        onClick={() => {
+                          setExamDurationLimit(opt.value);
+                          setIsCustomTimeLimit(false);
+                          setCustomMinutes("");
+                        }}
+                        className={`px-2 py-1.5 rounded-lg border text-[11px] font-extrabold transition-all text-center cursor-pointer ${
+                          isSelected
+                            ? "bg-indigo-600 border-indigo-600 text-white"
+                            : "bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-700"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCustomTimeLimit(true);
+                      setExamDurationLimit(25); // Default custom
+                      setCustomMinutes("25");
+                    }}
+                    className={`px-2 py-1.5 rounded-lg border text-[11px] font-extrabold transition-all text-center cursor-pointer col-span-1 ${
+                      isCustomTimeLimit
+                        ? "bg-indigo-600 border-indigo-600 text-white"
+                        : "bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-700"
+                    }`}
+                  >
+                    Personalizado...
+                  </button>
+                </div>
+                
+                {/* Custom input */}
+                {isCustomTimeLimit && (
+                  <div className="flex items-center gap-2 pt-1 animate-fade-in">
+                    <input
+                      type="number"
+                      min="1"
+                      max="480"
+                      value={customMinutes}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCustomMinutes(val);
+                        const mins = parseInt(val, 10);
+                        if (!isNaN(mins) && mins > 0) {
+                          setExamDurationLimit(mins);
+                        } else {
+                          setExamDurationLimit(null);
+                        }
+                      }}
+                      placeholder="Minutos"
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs text-slate-800 font-sans font-bold focus:outline-none focus:ring-1 focus:ring-indigo-500 w-28 bg-white"
+                    />
+                    <span className="text-xs text-slate-500 font-semibold font-sans">minutos</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -518,9 +638,9 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
       
       {/* Upper core indicators and actions */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-5">
-        <div className="space-y-1">
+        <div className="space-y-1 text-left">
           <div className="flex items-center gap-2">
-            <span className="bg-purple-50 text-purple-700 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-purple-150">
+            <span className="bg-indigo-50 text-indigo-700 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full border border-indigo-150">
               {examStatus === 'completed' ? "✓ Examen Concluido" : "⚡ Examen Aplicándose"}
             </span>
             <span className="text-xs text-slate-450 font-mono">
@@ -528,8 +648,23 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
             </span>
           </div>
           <h2 className="text-md sm:text-lg font-black text-slate-900 font-sans truncate max-w-sm">
-            {quiz.title} • {formatTimer(timerElapsed)}
+            {quiz.title}
           </h2>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs font-semibold text-slate-500 items-center">
+            <span>Límite: <strong className="text-indigo-600">{examDurationLimit ? `${examDurationLimit} min` : "Sin límite"}</strong></span>
+            {examDurationLimit && (
+              <>
+                <span className="h-1.5 w-1.5 bg-slate-300 rounded-full" />
+                <span>Tiempo Restante: <strong className={examDurationLimit * 60 - timerElapsed <= 60 ? "text-rose-605 animate-pulse font-black" : examDurationLimit * 60 - timerElapsed <= 300 ? "text-amber-605 font-black" : "text-emerald-650 font-bold"}>{examStatus === 'completed' ? "00:00" : formatTimer(Math.max(0, examDurationLimit * 60 - timerElapsed))}</strong></span>
+              </>
+            )}
+            {!examDurationLimit && (
+              <>
+                <span className="h-1.5 w-1.5 bg-slate-300 rounded-full" />
+                <span>Tiempo Transcurrido: <strong className="text-slate-700">{formatTimer(timerElapsed)}</strong></span>
+              </>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
@@ -578,16 +713,16 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
           <p className="text-xl font-bold font-mono text-slate-800">{totalRegistered}</p>
         </div>
         <div>
-          <p className="text-[10px] font-black uppercase text-slate-400 font-mono">Completados</p>
+          <p className="text-[10px] font-black uppercase text-emerald-600 font-mono">Terminados (✓)</p>
           <p className="text-xl font-bold font-mono text-emerald-650">{totalCompleted}</p>
         </div>
         <div>
-          <p className="text-[10px] font-black uppercase text-slate-400 font-mono">Pendientes</p>
-          <p className="text-xl font-bold font-mono text-amber-650">{totalRegistered - totalCompleted}</p>
+          <p className="text-[10px] font-black uppercase text-indigo-600 font-mono">En Progreso (⚡)</p>
+          <p className="text-xl font-bold font-mono text-indigo-650">{totalEnProgreso}</p>
         </div>
         <div>
-          <p className="text-[10px] font-black uppercase text-slate-400 font-mono">Reactivos Examen</p>
-          <p className="text-xl font-bold font-mono text-indigo-650">{quiz.questions.length}</p>
+          <p className="text-[10px] font-black uppercase text-amber-600 font-mono">Pendientes (⏱️)</p>
+          <p className="text-xl font-bold font-mono text-amber-650">{totalPendientes}</p>
         </div>
       </div>
 
@@ -605,18 +740,26 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
             {(Object.values(examProgress) as StudentExamProgress[]).map(p => (
               <div 
                 key={p.playerId || p.socketId}
-                className={`p-4 rounded-xl border flex items-center justify-between gap-4 transition-all ${
+                className={`p-4 rounded-xl border flex items-center justify-between gap-4 transition-all shadow-2xs ${
                   p.completed 
-                    ? "bg-emerald-50/50 border-emerald-250 text-emerald-900" 
+                    ? "bg-emerald-50/40 border-emerald-200 text-slate-900" 
                     : "bg-white border-slate-200"
                 }`}
               >
                 <div className="space-y-1 text-left">
                   <div className="flex items-center gap-2">
                     <span className="font-extrabold text-sm text-slate-800 leading-none">{p.name}</span>
-                    {p.completed && (
-                      <span className="bg-emerald-500 text-slate-950 text-[8px] font-black px-2 py-0.5 rounded-full uppercase scale-90">
-                        Completado
+                    {p.completed ? (
+                      <span className="bg-emerald-500 text-slate-950 text-[9px] font-black px-2 py-0.5 rounded-full uppercase font-mono">
+                        {p.autoSubmitted ? "Autoentregado" : "Terminado"}
+                      </span>
+                    ) : p.solvedCount > 0 ? (
+                      <span className="bg-indigo-100 border border-indigo-200 text-indigo-850 text-[9px] font-black px-2 py-0.5 rounded-full uppercase font-mono">
+                        En progreso
+                      </span>
+                    ) : (
+                      <span className="bg-amber-100 border border-amber-200 text-amber-850 text-[9px] font-black px-2 py-0.5 rounded-full uppercase font-mono">
+                        Pendiente
                       </span>
                     )}
                   </div>
