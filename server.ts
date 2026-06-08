@@ -10,6 +10,7 @@ import { Question, Questionnaire, Player, GameSession, PlayerAnswersCount, Team 
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import mammoth from "mammoth";
+import dns from "dns";
 
 const app = express();
 const server = http.createServer(app);
@@ -35,7 +36,8 @@ db.exec(`
     title TEXT NOT NULL,
     description TEXT,
     questions TEXT NOT NULL,
-    createdAt TEXT NOT NULL
+    createdAt TEXT NOT NULL,
+    game_type TEXT DEFAULT 'quiz_live'
   );
 
   CREATE TABLE IF NOT EXISTS game_history (
@@ -51,6 +53,19 @@ db.exec(`
 `);
 
 try {
+  db.exec("ALTER TABLE questionnaires ADD COLUMN game_type TEXT DEFAULT 'quiz_live'");
+} catch (e) {
+  // Safe to ignore if column already exists
+}
+
+try {
+  // Fix any null or empty game_type to keep the data consistent
+  db.exec("UPDATE questionnaires SET game_type = 'quiz_live' WHERE game_type IS NULL OR game_type = ''");
+} catch (e) {
+  console.error("Error setting game_type defaults:", e);
+}
+
+try {
   db.exec("ALTER TABLE game_history ADD COLUMN game_type TEXT DEFAULT 'quiz_live'");
 } catch (e) {
   // Safe to ignore if column already exists
@@ -64,8 +79,8 @@ function migrateFromJSON(): void {
       const data = fs.readFileSync(DB_FILE, "utf-8");
       const list: Questionnaire[] = JSON.parse(data);
       const insert = db.prepare(`
-        INSERT INTO questionnaires (id, title, description, questions, createdAt)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO questionnaires (id, title, description, questions, createdAt, game_type)
+        VALUES (?, ?, ?, ?, ?, ?)
       `);
       for (const quiz of list) {
         insert.run(
@@ -73,7 +88,8 @@ function migrateFromJSON(): void {
           quiz.title,
           quiz.description || "",
           JSON.stringify(quiz.questions),
-          quiz.createdAt
+          quiz.createdAt,
+          quiz.game_type || "quiz_live"
         );
       }
       console.log(`[SQLite] Migrados con éxito ${list.length} cuestionarios desde db.json`);
@@ -95,7 +111,8 @@ function loadQuestionnaires(): Questionnaire[] {
       title: r.title,
       description: r.description || "",
       questions: JSON.parse(r.questions),
-      createdAt: r.createdAt
+      createdAt: r.createdAt,
+      game_type: r.game_type || "quiz_live"
     }));
   } catch (error) {
     console.error("[SQLite] Error cargando cuestionarios:", error);
@@ -107,17 +124,18 @@ function loadQuestionnaires(): Questionnaire[] {
 function saveOneQuestionnaire(quiz: Questionnaire): void {
   try {
     const insertOrReplace = db.prepare(`
-      INSERT OR REPLACE INTO questionnaires (id, title, description, questions, createdAt)
-      VALUES (?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO questionnaires (id, title, description, questions, createdAt, game_type)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
     insertOrReplace.run(
       quiz.id,
       quiz.title,
       quiz.description || "",
       JSON.stringify(quiz.questions),
-      quiz.createdAt
+      quiz.createdAt,
+      quiz.game_type || "quiz_live"
     );
-    console.log(`[SQLite] Guardado cuestionario ID ${quiz.id}`);
+    console.log(`[SQLite] Guardado cuestionario ID ${quiz.id} con tipo ${quiz.game_type || "quiz_live"}`);
   } catch (error) {
     console.error("[SQLite] Error guardando cuestionario:", error);
   }
@@ -445,11 +463,389 @@ app.get("/api/ip", async (req, res) => {
   }
 });
 
+// Network Diagnostic API for Prepmaster 2.0.1
+app.get("/api/network-diagnostic", async (req, res) => {
+  const interfaces = os.networkInterfaces();
+  let activeInterfaceName = "No detectada";
+  let networkType = "Local (Wi-Fi o Ethernet)";
+  
+  // Find the first active non-loopback IPv4 interface name
+  for (const name of Object.keys(interfaces)) {
+    const netList = interfaces[name];
+    if (netList) {
+      for (const net of netList) {
+        if (net.family === "IPv4" && !net.internal) {
+          activeInterfaceName = name; // e.g. "Wi-Fi", "Ethernet", "en0", "wlan0"
+          if (name.toLowerCase().includes("wi-fi") || name.toLowerCase().includes("wlan") || name.toLowerCase().includes("wireless") || name.toLowerCase().includes("wireles")) {
+            networkType = "Wi-Fi inalámbrica";
+          } else if (name.toLowerCase().includes("ethernet") || name.toLowerCase().includes("eth")) {
+            networkType = "Ethernet cableada";
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  const ips = getLocalIPs();
+  const preferredIP = ips[0];
+  const webPort = PORT;
+  const localUrl = `http://${preferredIP}:${webPort}`;
+  const appUrl = process.env.APP_URL || localUrl;
+
+  // Check internet lookup
+  let internetConnected = false;
+  try {
+    await new Promise<void>((resolve) => {
+      let resolved = false;
+      const timer = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          resolve();
+        }
+      }, 1500);
+
+      dns.lookup("google.com", (err) => {
+        clearTimeout(timer);
+        if (!resolved) {
+          resolved = true;
+          if (!err) {
+            internetConnected = true;
+          }
+          resolve();
+        }
+      });
+    });
+  } catch (e) {
+    internetConnected = false;
+  }
+
+  // Count connected sockets in socket.io
+  const deviceCount = io.sockets.sockets.size;
+
+  let qrLocal = "";
+  let qrApp = "";
+  try {
+    qrLocal = await QRCode.toDataURL(localUrl);
+    qrApp = process.env.APP_URL ? await QRCode.toDataURL(process.env.APP_URL) : qrLocal;
+  } catch (err) {
+    console.error("Error generating QR code in diagnostic", err);
+  }
+
+  res.json({
+    networkName: `${networkType} (${activeInterfaceName})`,
+    preferredIP,
+    port: webPort,
+    serverStatus: "online",
+    deviceCount,
+    internetConnected,
+    localUrl,
+    appUrl,
+    qrLocal,
+    qrApp
+  });
+});
+
 // List Questionnaires
 app.get("/api/questionnaires", (req, res) => {
-  const questionnaires = loadQuestionnaires();
-  // Return summarized info (no full question arrays needed for initial listing, but we send it)
+  let questionnaires = loadQuestionnaires();
+  const { game_type } = req.query;
+  if (game_type) {
+    questionnaires = questionnaires.filter(q => q.game_type === game_type);
+  }
   res.json(questionnaires);
+});
+
+// Dynamic template downloader API - Prepmaster 2.1.0
+app.get("/api/templates/:filename", (req, res) => {
+  const { filename } = req.params;
+  
+  if (filename.startsWith("quiz_live_template")) {
+    if (filename.endsWith(".txt")) {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      return res.send(`Pregunta: ¿Cuál es la fórmula química del agua?
+A) H2
+B) CO2
+C) H2O
+D) O2
+Respuesta: C
+Tiempo: 20
+Puntos: 1000
+Tema: Química
+
+Pregunta: ¿Qué planeta es conocido como el Planeta Rojo?
+A) Tierra
+B) Marte
+C) Júpiter
+D) Saturno
+Respuesta: B
+Tiempo: 30
+Puntos: 800
+Tema: Astronomía`);
+    } else {
+      const rows = [
+        {
+          "Pregunta": "¿Cuál es la fórmula química del agua?",
+          "Opción A": "H2",
+          "Opción B": "CO2",
+          "Opción C": "H2O",
+          "Opción D": "O2",
+          "Respuesta Correcta": "C",
+          "Tiempo (segundos)": 20,
+          "Puntos": 1000,
+          "Tema": "Química"
+        },
+        {
+          "Pregunta": "¿Qué planeta es conocido como el Planeta Rojo?",
+          "Opción A": "Tierra",
+          "Opción B": "Marte",
+          "Opción C": "Júpiter",
+          "Opción D": "Saturno",
+          "Respuesta Correcta": "B",
+          "Tiempo (segundos)": 30,
+          "Puntos": 800,
+          "Tema": "Astronomía"
+        }
+      ];
+      if (filename.endsWith(".csv")) {
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        return res.send(Papa.unparse(rows));
+      } else {
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, "Quiz Live");
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+        return res.send(buf);
+      }
+    }
+  }
+
+  if (filename.startsWith("exam_mode_template")) {
+    if (filename.endsWith(".txt")) {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      return res.send(`Tipo: Opción múltiple
+Pregunta: ¿Cuál es el pH neutro del agua destilada?
+A) 5
+B) 7
+C) 9
+D) 14
+Respuesta: B
+Puntos: 2
+Tema: Química
+Retroalimentación: El pH neutro es exactamente 7.
+
+Tipo: Verdadero/Falso
+Pregunta: El sol es una estrella de tipo espectral G2V.
+Respuesta: Verdadero
+Puntos: 1
+Tema: Astronomía
+Retroalimentación: Sí, el Sol es una enana amarilla.
+
+Tipo: Respuesta corta
+Pregunta: ¿Qué gas de efecto invernadero liberan las vacas?
+Respuesta: Metano
+Alternativas: metano b, ch4, gas metano
+Puntos: 3
+Tema: Ecología
+Retroalimentación: Las vacas liberan gas metano debido a la fermentación entérica.`);
+    } else {
+      const rows = [
+        {
+          "Tipo": "Opción múltiple",
+          "Pregunta": "¿Cuál es el pH neutro del agua destilada?",
+          "Opción A": "5",
+          "Opción B": "7",
+          "Opción C": "9",
+          "Opción D": "14",
+          "Respuesta": "B",
+          "Alternativas (separadas por coma)": "",
+          "Puntos": 2,
+          "Tema": "Química",
+          "Retroalimentación": "El pH neutro es exactamente 7."
+        },
+        {
+          "Tipo": "Verdadero/Falso",
+          "Pregunta": "El sol es una estrella de tipo espectral G2V.",
+          "Opción A": "",
+          "Opción B": "",
+          "Opción C": "",
+          "Opción D": "",
+          "Respuesta": "Verdadero",
+          "Alternativas (separadas por coma)": "",
+          "Puntos": 1,
+          "Tema": "Astronomía",
+          "Retroalimentación": "Sí, el Sol es una enana amarilla."
+        },
+        {
+          "Tipo": "Respuesta corta",
+          "Pregunta": "¿Qué gas de efecto invernadero liberan las vacas?",
+          "Opción A": "",
+          "Opción B": "",
+          "Opción C": "",
+          "Opción D": "",
+          "Respuesta": "Metano",
+          "Alternativas (separadas por coma)": "metano b, ch4, gas metano",
+          "Puntos": 3,
+          "Tema": "Ecología",
+          "Retroalimentación": "Las vacas liberan gas metano debido a la fermentación entérica."
+        }
+      ];
+      if (filename.endsWith(".csv")) {
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        return res.send(Papa.unparse(rows));
+      } else {
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, "Modo Examen");
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+        return res.send(buf);
+      }
+    }
+  }
+
+  if (filename.startsWith("mexicanos_template")) {
+    if (filename.endsWith(".txt")) {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      return res.send(`Pregunta: Menciona cosas que llevas a la playa
+Respuesta: Toalla|45|toallas, sabana playera
+Respuesta: Bloqueador solar|30|bloqueador, protector, protector solar
+Respuesta: Traje de baño|15|bañador, short
+Respuesta: Lentes de sol|10|gafas, lentes, gafas de sol
+Tema: General
+Ronda: 1
+
+Pregunta: Algo que haces antes de dormir
+Respuesta: Lavarse los dientes|40|cepillarse, lavarme los dientes
+Respuesta: Apagar la luz|25|apagar la lampara, oscurecer
+Respuesta: Ponerse la pijama|20|cambiarse de ropa, vestir pijama
+Respuesta: Revisar el celular|15|mirar el movil, chatear
+Tema: Hábitos
+Ronda: 2`);
+    } else {
+      const rows = [
+        {
+          "Pregunta": "Menciona cosas que llevas a la playa",
+          "Respuesta 1": "Toalla|45|toallas, sabana playera",
+          "Respuesta 2": "Bloqueador solar|30|bloqueador, protector solar",
+          "Respuesta 3": "Traje de baño|15|bañador, short",
+          "Respuesta 4": "Lentes de sol|10|gafas de sol",
+          "Respuesta 5": "",
+          "Respuesta 6": "",
+          "Respuesta 7": "",
+          "Respuesta 8": "",
+          "Respuesta 9": "",
+          "Respuesta 10": "",
+          "Tema": "General",
+          "Ronda": 1
+        },
+        {
+          "Pregunta": "Algo que haces antes de dormir",
+          "Respuesta 1": "Lavarse los dientes|40|cepillarse",
+          "Respuesta 2": "Apagar la luz|25|oscurecer, apagar lampara",
+          "Respuesta 3": "Ponerse la pijama|20|cambiarse ropa",
+          "Respuesta 4": "Revisar el celular|15|mirar movil",
+          "Respuesta 5": "",
+          "Respuesta 6": "",
+          "Respuesta 7": "",
+          "Respuesta 8": "",
+          "Respuesta 9": "",
+          "Respuesta 10": "",
+          "Tema": "Hábitos",
+          "Ronda": 2
+        }
+      ];
+      if (filename.endsWith(".csv")) {
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        return res.send(Papa.unparse(rows));
+      } else {
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, "100 Mexicanos");
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+        return res.send(buf);
+      }
+    }
+  }
+
+  if (filename.startsWith("jeopardy_template")) {
+    if (filename.endsWith(".txt")) {
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      return res.send(`Categoria: Química
+
+Valor: 200
+Pregunta: ¿Cuál es la fórmula química del agua?
+Respuesta: H2O
+Pista: Está compuesta por hidrógeno y oxígeno.
+
+Valor: 400
+Pregunta: ¿Qué gas es indispensable para la respiración humana?
+Respuesta: Oxígeno
+Pista: O2
+
+Categoria: Historia
+
+Valor: 200
+Pregunta: ¿En qué año se descubrió América?
+Respuesta: 1492
+Pista: Siglo XV.
+
+Valor: 400
+Pregunta: ¿Quién fue el primer presidente de México?
+Respuesta: Guadalupe Victoria
+Pista: Su nombre real era José Miguel Fernández y Félix.`);
+    } else {
+      const rows = [
+        {
+          "Categoria": "Química",
+          "Valor": 200,
+          "Pregunta": "¿Cuál es la fórmula química del agua?",
+          "Respuesta": "H2O",
+          "Pista": "Está compuesta por hidrógeno y oxígeno."
+        },
+        {
+          "Categoria": "Química",
+          "Valor": 400,
+          "Pregunta": "¿Qué gas es indispensable para la respiración humana?",
+          "Respuesta": "Oxígeno",
+          "Pista": "O2"
+        },
+        {
+          "Categoria": "Historia",
+          "Valor": 200,
+          "Pregunta": "¿En qué año se descubrió América?",
+          "Respuesta": "1492",
+          "Pista": "Siglo XV"
+        },
+        {
+          "Categoria": "Historia",
+          "Valor": 400,
+          "Pregunta": "¿Quién fue el primer presidente de México?",
+          "Respuesta": "Guadalupe Victoria",
+          "Pista": "Su nombre real era José Miguel Fernández y Félix."
+        }
+      ];
+      if (filename.endsWith(".csv")) {
+        res.setHeader("Content-Type", "text/csv; charset=utf-8");
+        return res.send(Papa.unparse(rows));
+      } else {
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, "Jeopardy");
+        const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
+        return res.send(buf);
+      }
+    }
+  }
+
+  return res.status(404).send("Plantilla no encontrada");
 });
 
 // Create/Update Questionnaire
@@ -542,13 +938,15 @@ app.get("/api/session-results/:pin", (req, res) => {
 });
 
 // Endpoint: Parse mass-imported questions from files (TXT, CSV, XLSX, DOCX)
+// Endpoint: Parse mass-imported questions from files (TXT, CSV, XLSX, DOCX)
 app.post("/api/parse-file", async (req, res) => {
   try {
-    const { fileName, base64Data } = req.body;
+    const { fileName, base64Data, game_type } = req.body;
     if (!fileName || !base64Data) {
       return res.status(400).json({ success: false, error: "Faltan parámetros: se requiere fileName y base64Data." });
     }
 
+    const type = game_type || "quiz_live";
     const buffer = Buffer.from(base64Data, "base64");
     const ext = fileName.split(".").pop()?.toLowerCase();
 
@@ -560,23 +958,45 @@ app.post("/api/parse-file", async (req, res) => {
       return String(val).replace(/<[^>]*>/g, "").trim();
     };
 
-    if (ext === "txt") {
-      textContent = buffer.toString("utf-8");
-      questionsList = parseTextAndDocxQuestions(textContent, sanitize);
-    } else if (ext === "docx") {
-      const result = await mammoth.extractRawText({ buffer });
-      textContent = result.value;
-      questionsList = parseTextAndDocxQuestions(textContent, sanitize);
-    } else if (ext === "csv") {
-      const csvText = buffer.toString("utf-8");
-      const parseResult = Papa.parse(csvText, { skipEmptyLines: true });
-      questionsList = parseSpreadsheetRows(parseResult.data as any[][], sanitize);
-    } else if (ext === "xlsx" || ext === "xls") {
-      const workbook = XLSX.read(buffer, { type: "buffer" });
-      const sheetName = workbook.SheetNames[0];
-      const worksheet = workbook.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
-      questionsList = parseSpreadsheetRows(rows, sanitize);
+    if (ext === "txt" || ext === "docx") {
+      if (ext === "txt") {
+        textContent = buffer.toString("utf-8");
+      } else {
+        const result = await mammoth.extractRawText({ buffer });
+        textContent = result.value;
+      }
+      
+      if (type === "quiz_live") {
+        questionsList = parseTextAndDocxQuestions(textContent, sanitize);
+      } else if (type === "exam_mode") {
+        questionsList = parseExamQuestionsText(textContent, sanitize);
+      } else if (type === "mexicanos") {
+        questionsList = parseMexicanosQuestionsText(textContent, sanitize);
+      } else if (type === "jeopardy") {
+        questionsList = parseJeopardyQuestionsText(textContent, sanitize);
+      }
+    } else if (ext === "csv" || ext === "xlsx" || ext === "xls") {
+      let rows: any[][] = [];
+      if (ext === "csv") {
+        const csvText = buffer.toString("utf-8");
+        const parseResult = Papa.parse(csvText, { skipEmptyLines: true });
+        rows = parseResult.data as any[][];
+      } else {
+        const workbook = XLSX.read(buffer, { type: "buffer" });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+      }
+
+      if (type === "quiz_live") {
+        questionsList = parseSpreadsheetRows(rows, sanitize);
+      } else if (type === "exam_mode") {
+        questionsList = parseExamSpreadsheet(rows, sanitize);
+      } else if (type === "mexicanos") {
+        questionsList = parseMexicanosSpreadsheet(rows, sanitize);
+      } else if (type === "jeopardy") {
+        questionsList = parseJeopardySpreadsheet(rows, sanitize);
+      }
     } else {
       return res.status(400).json({ success: false, error: "Formato de archivo no soportado. Debe ser TXT, CSV, XLSX o DOCX." });
     }
@@ -591,17 +1011,28 @@ app.post("/api/parse-file", async (req, res) => {
 // Endpoint: Parse mass-imported questions from pasted text
 app.post("/api/parse-pasted-text", express.json({ limit: "15mb" }), async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, game_type } = req.body;
     if (text === undefined || text === null) {
       return res.status(400).json({ success: false, error: "Falta el parámetro 'text'." });
     }
 
+    const type = game_type || "quiz_live";
     const sanitize = (val: any): string => {
       if (val === undefined || val === null) return "";
       return String(val).replace(/<[^>]*>/g, "").trim();
     };
 
-    const questionsList = smartParsePastedText(text, sanitize);
+    let questionsList: any[] = [];
+    if (type === "quiz_live") {
+      questionsList = smartParsePastedText(text, sanitize);
+    } else if (type === "exam_mode") {
+      questionsList = parseExamQuestionsText(text, sanitize);
+    } else if (type === "mexicanos") {
+      questionsList = parseMexicanosQuestionsText(text, sanitize);
+    } else if (type === "jeopardy") {
+      questionsList = parseJeopardyQuestionsText(text, sanitize);
+    }
+
     return res.json({ success: true, questions: questionsList });
   } catch (err: any) {
     console.error("Error al interpretar texto pegado:", err);
@@ -769,6 +1200,375 @@ function smartParsePastedText(text: string, sanitize: (val: any) => string): any
 
   pushCurrent();
   return questions;
+}
+
+function parseExamQuestionsText(text: string, sanitize: (val: any) => string): any[] {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const blocks = normalized.split(/\n\s*\n+/);
+  const result: any[] = [];
+
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+
+    const lines = trimmed.split("\n").map(l => l.trim()).filter(Boolean);
+    let type: 'multiple_choice' | 'true_false' | 'short_answer' = 'multiple_choice';
+    let questionText = "";
+    const options: string[] = ["", "", "", ""];
+    let correctOption = 0;
+    let correctShortAnswer = "";
+    let feedback = "";
+    let points = 1;
+    let topic = "General";
+    let alternatives: string[] = [];
+
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      if (lower.startsWith("tipo:")) {
+        const t = sanitize(line.slice(5)).toLowerCase();
+        if (t.includes("verdadero") || t.includes("falso") || t.includes("t/f") || t.includes("tf")) {
+          type = 'true_false';
+          options[0] = "Verdadero";
+          options[1] = "Falso";
+        } else if (t.includes("corta") || t.includes("breve") || t.includes("short")) {
+          type = 'short_answer';
+        }
+      } else if (lower.startsWith("pregunta:")) {
+        questionText = sanitize(line.slice(9));
+      } else if (lower.match(/^\s*([a-d])[\s).:\]-]+(.*)$/i) && type === 'multiple_choice') {
+        const optionMatch = line.match(/^\s*([a-d])[\s).:\]-]+(.*)$/i);
+        if (optionMatch) {
+          const letter = optionMatch[1].toUpperCase();
+          const optionVal = sanitize(optionMatch[2]);
+          const idx = letter.charCodeAt(0) - 65;
+          options[idx] = optionVal;
+        }
+      } else if (lower.startsWith("respuesta:")) {
+        const respVal = sanitize(line.slice(10));
+        if (type === 'multiple_choice') {
+          if (/^[A-D]$/i.test(respVal)) {
+            correctOption = respVal.toUpperCase().charCodeAt(0) - 65;
+          } else {
+            const index = options.findIndex(o => o.toLowerCase() === respVal.toLowerCase());
+            if (index !== -1) correctOption = index;
+          }
+        } else if (type === 'true_false') {
+          const isTrue = respVal.toLowerCase().startsWith("v") || respVal.toLowerCase().startsWith("t") || respVal.toLowerCase() === "verdadero" || respVal.toLowerCase() === "true" || respVal === "0";
+          correctOption = isTrue ? 0 : 1;
+        } else {
+          correctShortAnswer = respVal;
+          options[0] = respVal;
+          correctOption = 0;
+        }
+      } else if (lower.startsWith("alternativas:")) {
+        const altRow = sanitize(line.slice(13));
+        alternatives = altRow.split(",").map(a => a.trim()).filter(Boolean);
+      } else if (lower.startsWith("retroalimentacion:") || lower.startsWith("retroalimentación:") || lower.startsWith("feedback:") || lower.startsWith("explicacion:") || lower.startsWith("explicación:")) {
+        const idxColon = line.indexOf(":");
+        feedback = sanitize(line.slice(idxColon + 1));
+      } else if (lower.startsWith("puntos:")) {
+        points = parseInt(line.slice(7).trim(), 10) || 1;
+      } else if (lower.startsWith("tema:") || lower.startsWith("topic:")) {
+        topic = sanitize(line.slice(5));
+      }
+    }
+
+    if (!questionText) continue;
+
+    result.push({
+      id: "q_item_" + Math.random().toString(36).substr(2, 9),
+      text: questionText,
+      options,
+      correctOption,
+      timeLimit: 20,
+      points,
+      topic,
+      type,
+      feedback,
+      correctShortAnswer,
+      alternatives,
+      isValid: true
+    });
+  }
+  return result;
+}
+
+function parseExamSpreadsheet(rows: any[][], sanitize: (val: any) => string): any[] {
+  const result: any[] = [];
+  if (rows.length < 2) return [];
+  
+  const headers = rows[0].map(h => String(h).trim().toLowerCase());
+  const idxTipo = headers.findIndex(h => h.includes("tipo"));
+  const idxPregunta = headers.findIndex(h => h.includes("pregunta") || h.includes("enunciado"));
+  const idxA = headers.findIndex(h => h.includes("opción a") || h.includes("opcion a"));
+  const idxB = headers.findIndex(h => h.includes("opción b") || h.includes("opcion b"));
+  const idxC = headers.findIndex(h => h.includes("opción c") || h.includes("opcion c"));
+  const idxD = headers.findIndex(h => h.includes("opción d") || h.includes("opcion d"));
+  const idxRespuesta = headers.findIndex(h => h.includes("respuesta") || h.includes("correcta"));
+  const idxAlts = headers.findIndex(h => h.includes("alternativa") || h.includes("alts"));
+  const idxPuntos = headers.findIndex(h => h.includes("puntos") || h.includes("pts"));
+  const idxTema = headers.findIndex(h => h.includes("tema") || h.includes("topic"));
+  const idxFeedback = headers.findIndex(h => h.includes("retro") || h.includes("feedback") || h.includes("explicacion") || h.includes("explicación"));
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.length === 0 || !row[idxPregunta]) continue;
+    
+    const tipoRaw = idxTipo !== -1 ? sanitize(row[idxTipo]).toLowerCase() : "";
+    let type: 'multiple_choice' | 'true_false' | 'short_answer' = 'multiple_choice';
+    if (tipoRaw.includes("verdadero") || tipoRaw.includes("falso") || tipoRaw.includes("t/f") || tipoRaw.includes("tf")) {
+      type = 'true_false';
+    } else if (tipoRaw.includes("corta") || tipoRaw.includes("breve") || tipoRaw.includes("short") || tipoRaw.includes("escribir")) {
+      type = 'short_answer';
+    }
+
+    const text = sanitize(row[idxPregunta]);
+    if (!text) continue;
+
+    const optA = idxA !== -1 ? sanitize(row[idxA]) : "";
+    const optB = idxB !== -1 ? sanitize(row[idxB]) : "";
+    const optC = idxC !== -1 ? sanitize(row[idxC]) : "";
+    const optD = idxD !== -1 ? sanitize(row[idxD]) : "";
+
+    const finalOptions = [optA, optB, optC, optD];
+    
+    const respRaw = idxRespuesta !== -1 ? sanitize(row[idxRespuesta]) : "";
+    let correctOption = 0;
+    let correctShortAnswer = "";
+    
+    if (type === 'multiple_choice') {
+      if (/^[A-D]$/i.test(respRaw)) {
+        correctOption = respRaw.toUpperCase().charCodeAt(0) - 65;
+      } else {
+        const foundIdx = finalOptions.findIndex(o => o && o.toLowerCase() === respRaw.toLowerCase());
+        if (foundIdx !== -1) correctOption = foundIdx;
+      }
+    } else if (type === 'true_false') {
+      const isTrue = respRaw.toLowerCase().startsWith("v") || respRaw.toLowerCase().startsWith("t") || respRaw.toLowerCase() === "verdadero" || respRaw.toLowerCase() === "true" || respRaw === "0";
+      correctOption = isTrue ? 0 : 1;
+      finalOptions[0] = "Verdadero";
+      finalOptions[1] = "Falso";
+      finalOptions[2] = "";
+      finalOptions[3] = "";
+    } else {
+      correctShortAnswer = respRaw;
+      finalOptions[0] = respRaw;
+      finalOptions[1] = "";
+      finalOptions[2] = "";
+      finalOptions[3] = "";
+      correctOption = 0;
+    }
+
+    const points = idxPuntos !== -1 ? parseInt(row[idxPuntos], 10) || 1 : 1;
+    const topic = idxTema !== -1 ? sanitize(row[idxTema]) : "General";
+    const feedback = idxFeedback !== -1 ? sanitize(row[idxFeedback]) : "";
+    const altsStr = idxAlts !== -1 ? sanitize(row[idxAlts]) : "";
+    const alternatives = altsStr.split(",").map(t => t.trim()).filter(Boolean);
+
+    result.push({
+      id: "q_item_" + Math.random().toString(36).substr(2, 9),
+      text,
+      options: finalOptions,
+      correctOption,
+      timeLimit: 20,
+      points,
+      topic,
+      type,
+      feedback,
+      correctShortAnswer,
+      alternatives,
+      isValid: true
+    });
+  }
+  return result;
+}
+
+function parseMexicanosQuestionsText(text: string, sanitize: (val: any) => string): any[] {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const blocks = normalized.split(/\n\s*\n+/);
+  const result: any[] = [];
+
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+
+    const lines = trimmed.split("\n").map(l => l.trim()).filter(Boolean);
+    let questionText = "";
+    const options: string[] = [];
+    let topic = "General";
+    let round = 1;
+
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      if (lower.startsWith("pregunta:")) {
+        questionText = sanitize(line.slice(9));
+      } else if (lower.startsWith("respuesta:")) {
+        options.push(sanitize(line.slice(10)));
+      } else if (lower.startsWith("tema:") || lower.startsWith("topic:")) {
+        topic = sanitize(line.slice(5));
+      } else if (lower.startsWith("ronda:") || lower.startsWith("round:")) {
+        const rIdx = line.indexOf(":");
+        round = parseInt(line.slice(rIdx + 1).trim(), 10) || 1;
+      }
+    }
+
+    if (!questionText || options.length === 0) continue;
+
+    result.push({
+      id: "q_item_" + Math.random().toString(36).substr(2, 9),
+      text: questionText,
+      options,
+      correctOption: 0,
+      timeLimit: 20,
+      topic,
+      round,
+      isValid: true
+    });
+  }
+  return result;
+}
+
+function parseMexicanosSpreadsheet(rows: any[][], sanitize: (val: any) => string): any[] {
+  const result: any[] = [];
+  if (rows.length < 2) return [];
+
+  const headers = rows[0].map(h => String(h).trim().toLowerCase());
+  const idxPregunta = headers.findIndex(h => h.includes("pregunta"));
+  const idxTema = headers.findIndex(h => h.includes("tema") || h.includes("topic"));
+  const idxRonda = headers.findIndex(h => h.includes("ronda") || h.includes("round"));
+  
+  const respIndices: number[] = [];
+  for (let c = 0; c < headers.length; c++) {
+    if (headers[c].includes("respuesta") || headers[c].startsWith("resp")) {
+      respIndices.push(c);
+    }
+  }
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.length === 0 || !row[idxPregunta]) continue;
+
+    const text = sanitize(row[idxPregunta]);
+    if (!text) continue;
+
+    const options: string[] = [];
+    respIndices.forEach(idx => {
+      if (row[idx]) {
+        options.push(sanitize(row[idx]));
+      }
+    });
+
+    if (options.length === 0) continue;
+
+    const topic = idxTema !== -1 ? sanitize(row[idxTema]) : "General";
+    const round = idxRonda !== -1 ? parseInt(row[idxRonda], 10) || 1 : 1;
+
+    result.push({
+      id: "q_item_" + Math.random().toString(36).substr(2, 9),
+      text,
+      options,
+      correctOption: 0,
+      timeLimit: 20,
+      topic,
+      round,
+      isValid: true
+    });
+  }
+  return result;
+}
+
+function parseJeopardyQuestionsText(text: string, sanitize: (val: any) => string): any[] {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const blocks = normalized.split(/\n\s*\n+/);
+  const result: any[] = [];
+  let currentCategory = "General";
+
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed) continue;
+
+    const lines = trimmed.split("\n").map(l => l.trim()).filter(Boolean);
+    
+    if (lines.length === 1 && lines[0].toLowerCase().startsWith("categoria:")) {
+      currentCategory = sanitize(lines[0].slice(10));
+      continue;
+    }
+
+    let val = 200;
+    let questionText = "";
+    let answerText = "";
+    let hintText = "";
+
+    for (const line of lines) {
+      const lower = line.toLowerCase();
+      if (lower.startsWith("categoria:") || lower.startsWith("categoría:")) {
+        currentCategory = sanitize(line.slice(10));
+      } else if (lower.startsWith("valor:")) {
+        val = parseInt(line.slice(6).trim(), 10) || 200;
+      } else if (lower.startsWith("pregunta:")) {
+        questionText = sanitize(line.slice(9));
+      } else if (lower.startsWith("respuesta:")) {
+        answerText = sanitize(line.slice(10));
+      } else if (lower.startsWith("pista:")) {
+        hintText = sanitize(line.slice(6));
+      }
+    }
+
+    if (!questionText && !answerText) continue;
+
+    result.push({
+      id: "q_item_" + Math.random().toString(36).substr(2, 9),
+      text: questionText,
+      options: [answerText, "", "", ""],
+      correctOption: 0,
+      timeLimit: 20,
+      topic: currentCategory,
+      points: val,
+      value: val,
+      hint: hintText,
+      isValid: true
+    });
+  }
+  return result;
+}
+
+function parseJeopardySpreadsheet(rows: any[][], sanitize: (val: any) => string): any[] {
+  const result: any[] = [];
+  if (rows.length < 2) return [];
+
+  const headers = rows[0].map(h => String(h).trim().toLowerCase());
+  const idxCat = headers.findIndex(h => h.includes("categor") || h.includes("topic"));
+  const idxVal = headers.findIndex(h => h.includes("valor") || h.includes("puntos") || h.includes("value") || h.includes("pts"));
+  const idxPregunta = headers.findIndex(h => h.includes("pregunta") || h.includes("clue") || h.includes("q"));
+  const idxRespuesta = headers.findIndex(h => h.includes("respuesta") || h.includes("ans") || h.includes("answer"));
+  const idxPista = headers.findIndex(h => h.includes("pista") || h.includes("hint"));
+
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row || row.length === 0 || !row[idxPregunta]) continue;
+
+    const text = sanitize(row[idxPregunta]);
+    if (!text) continue;
+
+    const category = idxCat !== -1 ? sanitize(row[idxCat]) : "General";
+    const val = idxVal !== -1 ? parseInt(row[idxVal], 10) || 200 : 200;
+    const answer = idxRespuesta !== -1 ? sanitize(row[idxRespuesta]) : "";
+    const hint = idxPista !== -1 ? sanitize(row[idxPista]) : "";
+
+    result.push({
+      id: "q_item_" + Math.random().toString(36).substr(2, 9),
+      text,
+      options: [answer, "", "", ""],
+      correctOption: 0,
+      timeLimit: 20,
+      topic: category,
+      points: val,
+      value: val,
+      hint,
+      isValid: true
+    });
+  }
+  return result;
 }
 
 // Helper for parsing word formats & text files

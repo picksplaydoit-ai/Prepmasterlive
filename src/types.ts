@@ -8,6 +8,16 @@ export interface Question {
   points?: number;
   origin?: 'manual' | 'txt' | 'csv' | 'xlsx' | 'docx' | 'pasted_text';
   createdAt?: string;
+
+  // 2.1.0 Game Format Extensions
+  type?: 'multiple_choice' | 'true_false' | 'short_answer';
+  feedback?: string;
+  alternatives?: string[];
+  correctShortAnswer?: string;
+  category?: string;
+  value?: number;
+  hint?: string;
+  round?: number;
 }
 
 export interface Questionnaire {
@@ -16,6 +26,7 @@ export interface Questionnaire {
   description: string;
   questions: Question[];
   createdAt: string;
+  game_type?: 'quiz_live' | 'exam_mode' | 'mexicanos' | 'jeopardy';
 }
 
 export interface Player {

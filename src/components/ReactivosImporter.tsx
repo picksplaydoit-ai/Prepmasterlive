@@ -11,6 +11,7 @@ import Papa from "papaparse";
 interface ReactivosImporterProps {
   onBack: () => void;
   onSaved: () => void;
+  initialGameType?: 'quiz_live' | 'exam_mode' | 'mexicanos' | 'jeopardy';
 }
 
 interface TempQuestion {
@@ -23,292 +24,126 @@ interface TempQuestion {
   topic: string;
   error?: string;
   isValid: boolean;
+  type?: 'multiple_choice' | 'true_false' | 'short_answer';
+  feedback?: string;
+  correctShortAnswer?: string;
+  alternatives?: string[];
+  round?: number;
+  value?: number;
+  hint?: string;
 }
 
-export default function ReactivosImporter({ onBack, onSaved }: ReactivosImporterProps) {
+export default function ReactivosImporter({ onBack, onSaved, initialGameType }: ReactivosImporterProps) {
+  const [activeGameType, setActiveGameType] = useState<'quiz_live' | 'exam_mode' | 'mexicanos' | 'jeopardy'>(initialGameType || "quiz_live");
   const [dragActive, setDragActive] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  // Download official templates offline
-  const downloadXLSXTemplate = () => {
-    const headers = [
-      "pregunta", 
-      "opcion_a", 
-      "opcion_b", 
-      "opcion_c", 
-      "opcion_d", 
-      "respuesta", 
-      "tiempo", 
-      "puntos", 
-      "tema"
-    ];
-    
-    const rows = [
-      [
-        "¿De qué color es el residuo tóxico reactivo en la industria?", 
-        "Rosa", 
-        "Celeste", 
-        "Amarillo", 
-        "Verde", 
-        "C", 
-        30, 
-        1000, 
-        "Seguridad industrial"
-      ],
-      [
-        "¿Cuál de las siguientes es una fuente de energía renovable?", 
-        "Carbón Coque", 
-        "Petróleo crudo", 
-        "Gas licuado de petróleo o natural", 
-        "Energía solar fotovoltaica", 
-        "D", 
-        20, 
-        800, 
-        "Desarrollo sustentable"
-      ],
-      [
-        "¿Cuál es el resultado de resolver 15 * 6?", 
-        "80", 
-        "90", 
-        "105", 
-        "75", 
-        "B", 
-        45, 
-        1000, 
-        "Matemáticas"
-      ],
-      [
-        "¿Qué Ley física fundamental establece que a toda fuerza de acción le corresponde una de reacción opuesta?", 
-        "Primera ley de movimiento de Newton", 
-        "Segunda ley de proporcionalidad", 
-        "Tercera ley de correspondencia mecánica", 
-        "Ley de gravedad clásica", 
-        "C", 
-        30, 
-        1200, 
-        "Física"
-      ],
-      [
-        "¿Cuál de las siguientes fórmulas químicas representa correctamente la molécula inorgánica del agua?", 
-        "CO2", 
-        "H2O", 
-        "NaCl", 
-        "O2", 
-        "B", 
-        30, 
-        1000, 
-        "Química"
-      ]
-    ];
+  // Download templates dynamically from server
+  const downloadTemplate = (format: 'txt' | 'csv' | 'xlsx') => {
+    let basename = "quiz_live_template";
+    if (activeGameType === "exam_mode") basename = "exam_mode_template";
+    if (activeGameType === "mexicanos") basename = "mexicanos_template";
+    if (activeGameType === "jeopardy") basename = "jeopardy_template";
 
-    const data = [headers, ...rows];
-    const worksheet = XLSX.utils.aoa_to_sheet(data);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Reactivos");
-    
-    const wbout = XLSX.write(workbook, { bookType: "xlsx", type: "array" });
-    const blob = new Blob([wbout], { type: "application/octet-stream" });
-    
-    const url = URL.createObjectURL(blob);
+    const filename = `${basename}.${format}`;
     const a = document.createElement("a");
-    a.href = url;
-    a.download = "plantilla_reactivos_prepmaster.xlsx";
+    a.href = `/api/templates/${filename}`;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
   };
 
-  const downloadCSVTemplate = () => {
-    const headers = [
-      "pregunta", 
-      "opcion_a", 
-      "opcion_b", 
-      "opcion_c", 
-      "opcion_d", 
-      "respuesta", 
-      "tiempo", 
-      "puntos", 
-      "tema"
-    ];
-    const rows = [
-      [
-        "¿De qué color es el residuo tóxico reactivo en la industria?", 
-        "Rosa", 
-        "Celeste", 
-        "Amarillo", 
-        "Verde", 
-        "C", 
-        "30", 
-        "1000", 
-        "Seguridad industrial"
-      ],
-      [
-        "¿Cuál de las siguientes es una fuente de energía renovable?", 
-        "Carbón Coque", 
-        "Petróleo crudo", 
-        "Gas licuado de petróleo o natural", 
-        "Energía solar fotovoltaica", 
-        "D", 
-        "20", 
-        "800", 
-        "Desarrollo sustentable"
-      ],
-      [
-        "¿Cuál es el resultado de resolver 15 * 6?", 
-        "80", 
-        "90", 
-        "105", 
-        "75", 
-        "B", 
-        "45", 
-        "1000", 
-        "Matemáticas"
-      ],
-      [
-        "¿Qué Ley física fundamental establece que a toda fuerza de acción le corresponde una de reacción opuesta?", 
-        "Primera ley de movimiento de Newton", 
-        "Segunda ley de proporcionalidad", 
-        "Tercera ley de correspondencia mecánica", 
-        "Ley de gravedad clásica", 
-        "C", 
-        "30", 
-        "1200", 
-        "Física"
-      ],
-      [
-        "¿Cuál de las siguientes fórmulas químicas representa correctamente la molécula inorgánica del agua?", 
-        "CO2", 
-        "H2O", 
-        "NaCl", 
-        "O2", 
-        "B", 
-        "30", 
-        "1000", 
-        "Química"
-      ]
-    ];
-    
-    const csvContent = Papa.unparse({
-      fields: headers,
-      data: rows
-    });
-    
-    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "plantilla_reactivos_prepmaster.csv";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  const getGuideItems = () => {
+    if (activeGameType === "quiz_live") {
+      return [
+        "Usa una pregunta por fila en Excel/CSV o bloque en TXT.",
+        "Marca la respuesta correcta únicamente con la letra (A, B, C o D).",
+        "Si dejas el campo de tiempo vacío, se usará el valor de 30 segundos.",
+        "Si dejas el campo de puntos vacío, se asignarán 1000 puntos estándar."
+      ];
+    } else if (activeGameType === "exam_mode") {
+      return [
+        "Soporta Tipo: Opción múltiple, Tipo: Verdadero/Falso y Tipo: Respuesta corta.",
+        "Para Opción múltiple indícalo en columna Tipo y configura opciones A, B, C, D.",
+        "Para Verdadero/Falso la respuesta en plantilla debe ser Verdadero o Falso.",
+        "Para Respuesta corta proporciona la respuesta y opcionalmente alternativas.",
+        "Inserta una retroalimentación con columna Retroalimentación: <texto>."
+      ];
+    } else if (activeGameType === "mexicanos") {
+      return [
+        "Preguntas tipo tablero de respuestas valoradas por popularidad.",
+        "Estructura de respuesta recomendada: Respuesta <n>: <texto>|<puntos>|<sinónimos>.",
+        "Asigna la ronda con la columna Ronda (1, 2 o 3).",
+        "Configura de 3 a 10 respuestas posibles por cada pregunta."
+      ];
+    } else {
+      return [
+        "Configura en columna Categoria la sección de tarjetas del tablero.",
+        "Define el valor de la pista en columna Valor (ej. 200, 400, 600, 800, 1000).",
+        "El texto principal se define en columna Pregunta y la solución en Respuesta.",
+        "Opcionalmente añade una pista complementaria en la columna Pista."
+      ];
+    }
   };
 
-  const downloadTXTTemplate = () => {
-    const content = `Pregunta:
-¿Cuál de las siguientes fórmulas químicas representa correctamente la molécula inorgánica del agua?
-A) CO2
-B) H2O
-C) NaCl
-D) O2
-Respuesta: B
-Tiempo: 30
-Puntos: 1000
-Tema: Química
-
-Pregunta:
-¿Cuál es el resultado de resolver 15 * 6?
-A) 80
-B) 90
-C) 105
-D) 75
-Respuesta: B
-Tiempo: 45
-Puntos: 1000
-Tema: Matemáticas
-
-Pregunta:
-¿Cuál de las siguientes es una fuente de energía renovable?
-A) Carbón Coque
-B) Petróleo crudo
-C) Gas licuado de petróleo o natural
-D) Energía solar fotovoltaica
-Respuesta: D
-Tiempo: 20
-Puntos: 800
-Tema: Desarrollo sustentable
-
-Pregunta:
-¿De qué color es el residuo tóxico reactivo en la industria?
-A) Rosa
-B) Celeste
-C) Amarillo
-D) Verde
-Respuesta: C
-Tiempo: 30
-Puntos: 1000
-Tema: Seguridad industrial
-
-Pregunta:
-¿Qué Ley física fundamental establece que a toda fuerza de acción le corresponde una de reacción opuesta?
-A) Primera ley de movimiento de Newton
-B) Segunda ley de proporcionalidad
-C) Tercera ley de correspondencia mecánica
-D) Ley de gravedad clásica
-Respuesta: C
-Tiempo: 30
-Puntos: 1200
-Tema: Física`;
-
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "plantilla_reactivos_prepmaster.txt";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
 
   const [showTemplateMenu, setShowTemplateMenu] = useState(false);
   const [activeTab, setActiveTab] = useState<'file' | 'pasted'>('file');
   const [pastedText, setPastedText] = useState("");
 
   const handleLoadSample = () => {
-    setPastedText(`¿Cuál es la fórmula del agua?
-A) CO2
-B) H2O
-C) NaCl
-D) O2
+    if (activeGameType === "quiz_live") {
+      setPastedText(`Pregunta: ¿Cuál es el pH neutro del agua destilada?
+A) 5
+B) 7
+C) 9
+D) 14
 Respuesta: B
-Tiempo: 30
-Puntos: 1000
-Tema: Química
-
-Pregunta:
-¿Qué estudia la toxicología de alimentos?
-A) Nutrición
-B) Efectos nocivos de sustancias químicas
-C) Microbiología
-D) Gastronomía
-Respuesta: B
-Tiempo: 30
-Puntos: 1000
-Tema: Toxicología
-
-1. ¿De qué color es el residuo tóxico reactivo en la industria?
-A) Rosa
-B) Celeste
-C) Amarillo
-D) Verde
-Respuesta: C
 Tiempo: 20
-Puntos: 800
-Tema: Seguridad industrial`);
+Puntos: 1000
+Tema: Química`);
+    } else if (activeGameType === "exam_mode") {
+      setPastedText(`Tipo: Opción múltiple
+Pregunta: ¿Cuál es el pH neutro del agua destilada?
+A) 5
+B) 7
+C) 9
+D) 14
+Respuesta: B
+Puntos: 2
+Tema: Química
+Retroalimentación: El pH del agua neutra es 7.
+
+Tipo: Verdadero/Falso
+Pregunta: El sol es una estrella enana amarilla.
+Respuesta: Verdadero
+Puntos: 1
+Tema: Astronomía
+Retroalimentación: Sí, el Sol pertenece al tipo espectral G2V.`);
+    } else if (activeGameType === "mexicanos") {
+      setPastedText(`Pregunta: Cosas que llevas a la playa
+Respuesta: Toalla|45|toallas, sabana playera
+Respuesta: Bloqueador solar|30|bloqueador, protector, bronceador
+Respuesta: Traje de baño|15|bañador, bikini
+Respuesta: Lentes de sol|10|gafas, lentes
+Tema: General
+Ronda: 1`);
+    } else if (activeGameType === "jeopardy") {
+      setPastedText(`Categoria: Geografía
+
+Valor: 200
+Pregunta: ¿Cuál es la capital de Italia?
+Respuesta: Roma
+Pista: Alberga el Coliseo y la Ciudad del Vaticano.
+
+Valor: 400
+Pregunta: ¿En qué continente queda Egipto?
+Respuesta: África
+Pista: Cuna de los antiguos faraones.`);
+    }
   };
 
   const handleClearPastedText = () => {
@@ -330,7 +165,7 @@ Tema: Seguridad industrial`);
       const response = await fetch("/api/parse-pasted-text", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: pastedText })
+        body: JSON.stringify({ text: pastedText, game_type: activeGameType })
       });
 
       if (response.ok) {
@@ -383,19 +218,21 @@ Tema: Seguridad industrial`);
     topic: string;
   } | null>(null);
 
-  // Fetch list of quizzes on mount to populate existing quiz dropdown
+  // Fetch list of quizzes on mount or when active game type changes to populate existing quiz dropdown
   useEffect(() => {
     fetchExistingQuizzes();
-  }, []);
+  }, [activeGameType]);
 
   const fetchExistingQuizzes = async () => {
     try {
-      const res = await fetch("/api/questionnaires");
+      const res = await fetch(`/api/questionnaires?game_type=${activeGameType}`);
       if (res.ok) {
         const data = await res.json();
         setExistingQuizzes(data);
         if (data.length > 0) {
           setSelectedQuizId(data[0].id);
+        } else {
+          setSelectedQuizId("");
         }
       }
     } catch (err) {
@@ -479,7 +316,8 @@ Tema: Seguridad industrial`);
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             fileName: selectedFile.name,
-            base64Data
+            base64Data,
+            game_type: activeGameType
           })
         });
 
@@ -654,8 +492,8 @@ Tema: Seguridad industrial`);
         }
 
         // Convert TempQuestion back to Question schema
-        finalQuestionsList = validQuestions.map((vq) => ({
-          id: `q_item_${Math.random().toString(36).substring(2, 11)}`,
+        finalQuestionsList = validQuestions.map((vq: any) => ({
+          id: vq.id || `q_item_${Math.random().toString(36).substring(2, 11)}`,
           text: vq.text,
           options: vq.options,
           correctOption: vq.correctOption,
@@ -663,7 +501,14 @@ Tema: Seguridad industrial`);
           topic: vq.topic || "General",
           points: vq.points || 1000,
           origin: fileExtStr,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          type: vq.type || "multiple_choice",
+          feedback: vq.feedback || "",
+          correctShortAnswer: vq.correctShortAnswer || "",
+          alternatives: vq.alternatives || [],
+          round: vq.round || 1,
+          value: vq.value || 200,
+          hint: vq.hint || ""
         }));
       } else {
         // Appending to existing
@@ -698,8 +543,8 @@ Tema: Seguridad industrial`);
 
         // Convert existing and add the new ones
         const currentQuestions: Question[] = existing.questions || [];
-        const addedQuestions: Question[] = validQuestions.map((vq) => ({
-          id: `q_item_${Math.random().toString(36).substring(2, 11)}`,
+        const addedQuestions: Question[] = validQuestions.map((vq: any) => ({
+          id: vq.id || `q_item_${Math.random().toString(36).substring(2, 11)}`,
           text: vq.text,
           options: vq.options,
           correctOption: vq.correctOption,
@@ -707,7 +552,14 @@ Tema: Seguridad industrial`);
           topic: vq.topic || "General",
           points: vq.points || 1000,
           origin: fileExtStr,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          type: vq.type || "multiple_choice",
+          feedback: vq.feedback || "",
+          correctShortAnswer: vq.correctShortAnswer || "",
+          alternatives: vq.alternatives || [],
+          round: vq.round || 1,
+          value: vq.value || 200,
+          hint: vq.hint || ""
         }));
 
         finalQuestionsList = [...currentQuestions, ...addedQuestions];
@@ -722,7 +574,8 @@ Tema: Seguridad industrial`);
           title: finalTitle,
           description: finalDesc,
           questions: finalQuestionsList,
-          createdAt: createdAtStr
+          createdAt: createdAtStr,
+          game_type: activeGameType
         })
       });
 
@@ -795,6 +648,25 @@ Tema: Seguridad industrial`);
         </div>
       )}
 
+      {/* Target Game Bank Selector */}
+      <div className="mb-6 bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col sm:flex-row justify-between items-center gap-3">
+        <label className="text-xs font-black text-slate-700">Seleccionar Banco Destino para la Importación:</label>
+        <select
+          value={activeGameType}
+          onChange={(e) => {
+            setActiveGameType(e.target.value as any);
+            setQuestions([]);
+            setUploadError(null);
+          }}
+          className="bg-white border border-slate-250 text-xs font-extrabold px-3 py-2 rounded-xl outline-none cursor-pointer"
+        >
+          <option value="quiz_live">Quiz Live 🎯</option>
+          <option value="exam_mode">Modo Examen 📝</option>
+          <option value="mexicanos">100 Mexicanos Dijeron 🇲🇽</option>
+          <option value="jeopardy">Jeopardy 🏆</option>
+        </select>
+      </div>
+
       {/* Target Tabs Selection for Importer Source */}
       {!file && questions.length === 0 && !parsing && (
         <div className="flex border-b border-slate-200 mb-6 gap-2" id="importer-tabs">
@@ -839,11 +711,9 @@ Tema: Seguridad industrial`);
               </h3>
               
               <ul className="space-y-2.5 text-xs font-semibold text-slate-650 list-disc list-inside leading-relaxed font-sans">
-                <li>Usa una pregunta por fila en Excel o CSV.</li>
-                <li>Marca la respuesta correcta únicamente con la letra <strong className="text-indigo-600 font-bold">A, B, C o D</strong>.</li>
-                <li>Si dejas el campo de tiempo vacío, se usará el valor predeterminado de <strong className="text-slate-900 font-bold">30 segundos</strong>.</li>
-                <li>Si dejas el campo de puntos vacío, se acumularán <strong className="text-slate-950 font-bold">1000 puntos</strong> estándar.</li>
-                <li>El tema ingresado ayuda a categorizar tus reactivos y generar estadísticas de aprendizaje después.</li>
+                {getGuideItems().map((item, idx) => (
+                  <li key={idx} className="font-sans font-medium text-xs leading-relaxed">{item}</li>
+                ))}
               </ul>
               
               <div className="pt-3.5 border-t border-slate-200 flex flex-col sm:flex-row gap-3 items-start sm:items-center justify-between">
@@ -859,21 +729,21 @@ Tema: Seguridad industrial`);
                 {showTemplateMenu && (
                   <div className="flex flex-wrap gap-2 animate-fade-in" id="templates-download-menu">
                     <button 
-                      onClick={downloadXLSXTemplate}
+                      onClick={() => downloadTemplate("xlsx")}
                       className="flex items-center gap-1.5 bg-white border border-slate-250 hover:border-emerald-500 hover:text-emerald-700 font-sans font-bold text-xs px-3 py-2 rounded-lg shadow-sm transition-all cursor-pointer"
                     >
                       <FileSpreadsheet size={14} className="text-emerald-600" />
                       <span>Excel (.xlsx)</span>
                     </button>
                     <button 
-                      onClick={downloadCSVTemplate}
+                      onClick={() => downloadTemplate("csv")}
                       className="flex items-center gap-1.5 bg-white border border-slate-250 hover:border-teal-500 hover:text-teal-700 font-sans font-bold text-xs px-3 py-2 rounded-lg shadow-sm transition-all cursor-pointer"
                     >
                       <FileSpreadsheet size={14} className="text-teal-600" />
                       <span>Ejemplo CSV (.csv)</span>
                     </button>
                     <button 
-                      onClick={downloadTXTTemplate}
+                      onClick={() => downloadTemplate("txt")}
                       className="flex items-center gap-1.5 bg-white border border-slate-250 hover:border-indigo-500 hover:text-indigo-700 font-sans font-bold text-xs px-3 py-2 rounded-lg shadow-sm transition-all cursor-pointer"
                     >
                       <FileText size={14} className="text-indigo-600" />

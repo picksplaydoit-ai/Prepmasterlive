@@ -13,11 +13,12 @@ import { AvatarRenderer, getAvatarById } from "./AvatarCatalog";
 import Mexicanos from "../games/100-mexicanos/Mexicanos";
 import JeopardyGame from "../games/jeopardy/JeopardyGame";
 import ExamMode from "../games/exam-mode/ExamMode";
+import NetworkDiagnostic from "./NetworkDiagnostic";
 
 interface TeacherDashboardProps {
   onCreateNew: () => void;
   onEdit: (quiz: Questionnaire) => void;
-  onImport: () => void;
+  onImport: (gameType?: 'quiz_live' | 'exam_mode' | 'mexicanos' | 'jeopardy') => void;
 }
 
 interface ConnectionInfo {
@@ -33,6 +34,12 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
   const [quizzes, setQuizzes] = useState<Questionnaire[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [bankCounts, setBankCounts] = useState<{
+    quiz_live: number;
+    exam_mode: number;
+    mexicanos: number;
+    jeopardy: number;
+  }>({ quiz_live: 0, exam_mode: 0, mexicanos: 0, jeopardy: 0 });
   
   // Connection details retrieved from server
   const [connInfo, setConnInfo] = useState<ConnectionInfo | null>(null);
@@ -119,12 +126,38 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
   useEffect(() => {
     fetchQuizzes();
     fetchConnectionInfo();
-  }, [activePin]);
+    fetchBankCounts();
+  }, [activePin, selectedDashboardGame]);
+
+  const fetchBankCounts = async () => {
+    try {
+      const res = await fetch("/api/questionnaires");
+      if (res.ok) {
+        const data = await res.json();
+        const counts = { quiz_live: 0, exam_mode: 0, mexicanos: 0, jeopardy: 0 };
+        data.forEach((q: any) => {
+          const type = q.game_type || "quiz_live";
+          if (type in counts) {
+            counts[type as keyof typeof counts]++;
+          }
+        });
+        setBankCounts(counts);
+      }
+    } catch (e) {
+      console.error("Error fetching bank counts:", e);
+    }
+  };
 
   const fetchQuizzes = async () => {
     try {
       setLoading(true);
-      const res = await fetch("/api/questionnaires");
+      let queryParam = "";
+      if (selectedDashboardGame === "quiz_live") queryParam = "?game_type=quiz_live";
+      else if (selectedDashboardGame === "mexicanos") queryParam = "?game_type=mexicanos";
+      else if (selectedDashboardGame === "jeopardy") queryParam = "?game_type=jeopardy";
+      else if (selectedDashboardGame === "exam") queryParam = "?game_type=exam_mode";
+
+      const res = await fetch(`/api/questionnaires${queryParam}`);
       if (res.ok) {
         const data = await res.json();
         setQuizzes(data);
@@ -1751,6 +1784,71 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
         </div>
 
+        {/* Bancos de Juegos Independientes */}
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-4 shadow-sm" id="questionnaire-banks-summary">
+          <div className="border-b border-slate-150 pb-3">
+            <h3 className="text-sm font-black text-slate-800 font-sans flex items-center gap-2">
+              📂 Bancos de Juegos Independientes
+            </h3>
+            <p className="text-[11px] text-slate-400 font-sans tracking-wide">
+              Cada modo cuenta con su propia plantilla, formato y base separada de reactivos. Haz clic para administrar su banco.
+            </p>
+          </div>
+          
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-1">
+            <button 
+              onClick={() => {
+                setSelectedDashboardGame("quiz_live");
+                setHostingGameType("quiz_live");
+              }}
+              className="bg-indigo-50/55 border border-indigo-100 hover:border-indigo-400 p-4 rounded-2xl text-center cursor-pointer transition-all hover:shadow-md"
+            >
+              <div className="text-xl">🎯</div>
+              <p className="text-xs font-black text-indigo-950 mt-1.5 leading-none">Quiz Live</p>
+              <span className="text-[10px] text-indigo-700 font-mono font-semibold mt-2 inline-block bg-indigo-100/70 px-2 py-0.5 rounded-full">{bankCounts.quiz_live} cuestionarios</span>
+            </button>
+
+            <button 
+              onClick={() => {
+                setSelectedDashboardGame("exam");
+                setHostingGameType("exam");
+              }}
+              className="bg-emerald-50/55 border border-emerald-100 hover:border-emerald-400 p-4 rounded-2xl text-center cursor-pointer transition-all hover:shadow-md"
+            >
+              <div className="text-xl">📝</div>
+              <p className="text-xs font-black text-emerald-950 mt-1.5 leading-none">Modo Examen</p>
+              <span className="text-[10px] text-emerald-700 font-mono font-semibold mt-2 inline-block bg-emerald-100/70 px-2 py-0.5 rounded-full">{bankCounts.exam_mode} cuestionarios</span>
+            </button>
+
+            <button 
+              onClick={() => {
+                setSelectedDashboardGame("mexicanos");
+                setHostingGameType("mexicanos");
+              }}
+              className="bg-amber-50/55 border border-amber-100 hover:border-amber-400 p-4 rounded-2xl text-center cursor-pointer transition-all hover:shadow-md"
+            >
+              <div className="text-xl">🇲🇽</div>
+              <p className="text-xs font-black text-amber-950 mt-1.5 leading-none">100 Mexicanos</p>
+              <span className="text-[10px] text-amber-700 font-mono font-semibold mt-2 inline-block bg-amber-100/70 px-2 py-0.5 rounded-full">{bankCounts.mexicanos} cuestionarios</span>
+            </button>
+
+            <button 
+              onClick={() => {
+                setSelectedDashboardGame("jeopardy");
+                setHostingGameType("jeopardy");
+              }}
+              className="bg-indigo-50/30 border border-indigo-150/50 hover:border-indigo-400 p-4 rounded-2xl text-center cursor-pointer transition-all hover:shadow-md"
+            >
+              <div className="text-xl">🏆</div>
+              <p className="text-xs font-black text-indigo-950 mt-1.5 leading-none">Jeopardy</p>
+              <span className="text-[10px] text-indigo-650 font-mono font-semibold mt-2 inline-block bg-slate-200 px-2 py-0.5 rounded-full">{bankCounts.jeopardy} cuestionarios</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Network and connectivity diagnostics section */}
+        <NetworkDiagnostic />
+
         {/* Persistent server IP footer */}
         {connInfo && (
           <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-sm bg-slate-50/50">
@@ -1807,7 +1905,10 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
           </button>
 
           <button
-            onClick={onImport}
+            onClick={() => {
+              const mappedType = selectedDashboardGame === "exam" ? "exam_mode" : selectedDashboardGame;
+              onImport(mappedType || "quiz_live");
+            }}
             className="flex items-center justify-center gap-2 bg-slate-50 border border-slate-200 text-slate-750 hover:bg-slate-100 font-sans font-bold px-5 py-3 rounded-xl shadow-sm transition-all text-xs cursor-pointer"
             id="btn-import-quiz"
           >

@@ -13,6 +13,7 @@ export default function App() {
   // Teacher-specific routing state
   const [quizView, setQuizView] = useState<'dashboard' | 'editor' | 'importer'>('dashboard');
   const [editingQuiz, setEditingQuiz] = useState<Questionnaire | null>(null);
+  const [importerGameType, setImporterGameType] = useState<'quiz_live' | 'exam_mode' | 'mexicanos' | 'jeopardy'>('quiz_live');
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans antialiased text-slate-800 flex flex-col justify-between" id="app-container">
@@ -141,7 +142,10 @@ export default function App() {
                   setEditingQuiz(quiz);
                   setQuizView('editor');
                 }}
-                onImport={() => {
+                onImport={(gameType?: 'quiz_live' | 'exam_mode' | 'mexicanos' | 'jeopardy') => {
+                  if (gameType) {
+                    setImporterGameType(gameType);
+                  }
                   setQuizView('importer');
                 }}
               />
@@ -155,6 +159,7 @@ export default function App() {
               />
             ) : (
               <ReactivosImporter 
+                initialGameType={importerGameType}
                 onBack={() => setQuizView('dashboard')}
                 onSaved={() => {
                   setQuizView('dashboard');
