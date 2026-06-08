@@ -14,6 +14,7 @@ import Mexicanos from "../games/100-mexicanos/Mexicanos";
 import JeopardyGame from "../games/jeopardy/JeopardyGame";
 import ExamMode from "../games/exam-mode/ExamMode";
 import NetworkDiagnostic from "./NetworkDiagnostic";
+import QRCode from "qrcode";
 
 interface TeacherDashboardProps {
   onCreateNew: () => void;
@@ -92,6 +93,22 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
   // Clipboard utility
   const [copied, setCopied] = useState(false);
+
+  // Dynamic Session QR URL state (2.1.1)
+  const [sessionQrUrl, setSessionQrUrl] = useState<string>("");
+  const [copiedPin, setCopiedPin] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
+
+  useEffect(() => {
+    if (activePin && activeGameType) {
+      const joinUrl = `${window.location.origin}/join?pin=${activePin}&game=${activeGameType}`;
+      QRCode.toDataURL(joinUrl, { width: 405, margin: 1 }, (err, url) => {
+        if (!err) {
+          setSessionQrUrl(url);
+        }
+      });
+    }
+  }, [activePin, activeGameType]);
 
   // New states for match results and export metrics
   const [gameResultsData, setGameResultsData] = useState<any | null>(null);
@@ -817,6 +834,7 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
           pin={activePin} 
           players={playersList} 
           teams={activeTeams} 
+          connInfo={connInfo}
           onBackToMenu={() => {
             if (window.confirm("¿Seguro que deseas concluir esta sesión de examen individual?")) {
               socket.emit("host:end-game", { pin: activePin });
@@ -930,71 +948,157 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
           {/* 1. LOBBY STATE */}
           {isLobby && (
-            <div className="flex-1 flex flex-col justify-center space-y-6" id="lobby-state-canvas">
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-                <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
-                  <QrCode className="text-indigo-600" size={20} />
-                  <span>¿Cómo unirse a la partida local?</span>
-                </h3>
-                <p className="text-xs sm:text-sm text-slate-500 max-w-xl">
-                  Los alumnos deben conectar sus teléfonos al mismo router local WiFi. Luego, escanean el código QR adjunto o escriben la dirección web en su navegador.
-                </p>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl space-y-2">
-                    <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider font-bold">Dirección de Entrada:</span>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-mono font-bold text-indigo-700 max-w-[170px] truncate select-all">
-                        {connInfo?.appUrl || "Cargando..."}
+            <div className="flex-1 flex flex-col justify-center space-y-6 animate-fade-in" id="lobby-state-canvas">
+              
+              {/* Instructions and Screen Splitting for classroom projection */}
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+                
+                {/* Left Area: Instructions & connected students list */}
+                <div className="lg:col-span-7 flex flex-col justify-between space-y-4">
+                  
+                  {/* Instructions card */}
+                  <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-xs space-y-3">
+                    <div className="space-y-1">
+                      <span className="bg-indigo-50 border border-indigo-150 text-indigo-700 text-[10px] uppercase font-black tracking-widest px-2.5 py-0.5 rounded-full inline-block">
+                        📶 WIFI LOCAL • SIN INTERNET MUNDIAL
                       </span>
+                      <h3 className="text-md font-black text-slate-800 flex items-center gap-2">
+                        <span>¿Cómo unirse a la partida?</span>
+                      </h3>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-normal font-medium">
+                      Conecta tu celular a la misma red WiFi que el profesor. Escanea el código QR de la derecha para entrar de forma directa, o copia la dirección y escribe el PIN.
+                    </p>
+                    
+                    <div className="bg-slate-50 border border-slate-200 p-3 rounded-xl flex items-center justify-between text-xs font-mono">
+                      <div>
+                        <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Dirección Local:</span>
+                        <span className="font-bold text-indigo-700 truncate block select-all">
+                          {connInfo?.appUrl || `${window.location.origin}`}
+                        </span>
+                      </div>
                       <button
-                        onClick={() => copyToClipboard(connInfo?.appUrl || "")}
-                        className="text-xs font-bold bg-white text-slate-700 hover:text-indigo-600 border border-slate-200 py-1 px-2.5 rounded-lg transition-all"
+                        onClick={() => {
+                          const url = connInfo?.appUrl || `${window.location.origin}`;
+                          navigator.clipboard.writeText(url);
+                          setCopiedUrl(true);
+                          setTimeout(() => setCopiedUrl(false), 2000);
+                        }}
+                        className="text-[10px] font-bold uppercase tracking-wider text-slate-600 bg-white hover:bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-lg transition-all"
                       >
-                        {copied ? "Súper" : "Copiar"}
+                        {copiedUrl ? "¡Listo!" : "Copiar"}
                       </button>
                     </div>
                   </div>
 
-                  <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex items-center justify-between">
-                    <div>
-                      <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider font-bold block">Red WiFi Local:</span>
-                      <span className="text-xs font-mono font-bold text-slate-700 block">Identificar router actual</span>
+                  {/* Connected Students Directory */}
+                  <div className="bg-white border border-slate-200 rounded-3xl p-5 flex-1 flex flex-col justify-between shadow-xs min-h-[180px]">
+                    <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-3">
+                      <span className="text-xs font-black text-slate-500 uppercase tracking-wider">
+                        Alumnos listos en sala ({playersList.length})
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="h-2 w-2 rounded-full bg-indigo-600 animate-pulse" />
+                        <span className="text-[10px] text-slate-400 font-mono font-bold uppercase">Esperando</span>
+                      </div>
                     </div>
-                    <span className="text-xs bg-indigo-50 text-indigo-700 font-bold px-2 py-1 rounded border border-indigo-100">offline-first</span>
-                  </div>
-                </div>
-              </div>
 
-              {/* Waiting players grid */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex-1 flex flex-col justify-between min-h-[160px]">
-                <div className="flex justify-between items-center border-b border-slate-100 pb-2 mb-3">
-                  <span className="text-xs font-extrabold text-slate-400 uppercase tracking-widest">Alumnos listos en sala ({playersList.length})</span>
-                  <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 animate-ping"></span>
-                </div>
-
-                <div className="flex-1 overflow-y-auto max-h-[180px] pr-2">
-                  {playersList.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-center py-6 text-slate-400 space-y-2">
-                      <Users size={28} className="text-slate-300 animate-pulse" />
-                      <p className="text-xs font-bold">Esperando que se sumen los teléfonos de los chicos...</p>
-                      <p className="text-[10px] text-slate-400 font-mono">¡Escribe el código PIN: {activePin} en el panel del alumno!</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                      {playersList.map((player) => (
-                        <div 
-                          key={player.id}
-                          className="bg-slate-50 border border-slate-200 py-1.5 px-2 rounded-xl flex items-center gap-1.5 animate-fade-in shadow-sm"
-                        >
-                          <AvatarRenderer id={player.avatarId} size={28} className="shrink-0 bg-white p-0.5 rounded-full border border-slate-200 shadow-xs" />
-                          <span className="text-xs font-bold text-slate-700 truncate" title={player.name}>{player.name}</span>
+                    <div className="flex-1 overflow-y-auto max-h-[160px] pr-1">
+                      {playersList.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-center py-6 text-slate-400 space-y-1.5">
+                          <Users size={24} className="text-slate-350 animate-bounce" />
+                          <p className="text-xs font-bold text-slate-500">¿Listos para competir?</p>
+                          <p className="text-[10px] text-slate-400 font-mono">Los nombres aparecerán conforme se unan.</p>
                         </div>
-                      ))}
+                      ) : (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {playersList.map((player) => (
+                            <div 
+                              key={player.id}
+                              className="bg-indigo-50/30 border border-indigo-100/50 py-1.5 px-2.5 rounded-xl flex items-center gap-2 animate-fade-in shadow-xs transition-transform hover:scale-[1.01]"
+                            >
+                              <AvatarRenderer id={player.avatarId} size={24} className="shrink-0 bg-white p-0.5 rounded-full border border-slate-200" />
+                              <span className="text-xs font-bold text-slate-700 truncate" title={player.name}>{player.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
+
                 </div>
+
+                {/* Right Area: Giant PIN and Dynamic QR projection helper */}
+                <div className="lg:col-span-5 flex flex-col justify-between space-y-4">
+                  
+                  {/* Giant PIN code block */}
+                  <div className="bg-white border-2 border-indigo-200 rounded-3xl p-5 text-center flex flex-col items-center justify-center shadow-xs" id="giant-pin-container-live">
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500 mb-1">
+                      PIN DE PARTIDA
+                    </span>
+                    <div className="text-[54px] sm:text-[72px] font-black font-mono tracking-widest text-indigo-950 leading-none py-1 selection:bg-indigo-100">
+                      {activePin}
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (activePin) {
+                          navigator.clipboard.writeText(activePin);
+                          setCopiedPin(true);
+                          setTimeout(() => setCopiedPin(false), 2000);
+                        }
+                      }}
+                      className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-150 text-indigo-700 text-[10px] font-black uppercase tracking-wider rounded-lg transition-all cursor-pointer shadow-xs"
+                    >
+                      <Clipboard size={10} />
+                      <span>{copiedPin ? "¡PIN Copiado!" : "Copiar PIN"}</span>
+                    </button>
+                  </div>
+
+                  {/* Helpful QR code block */}
+                  <div className="bg-white border border-slate-200 rounded-3xl p-5 flex flex-col items-center space-y-3 shadow-xs" id="smart-qr-preview-live">
+                    <div className="text-center space-y-0.5">
+                      <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider">Escanea y entra directo</h4>
+                      <p className="text-[10px] text-slate-400 font-sans leading-normal">
+                        No necesitas escribir el PIN si usas el QR.
+                      </p>
+                    </div>
+
+                    <div className="bg-white border border-slate-150 rounded-xl p-1.5 flex flex-col items-center justify-center aspect-square shadow-sm max-w-[150px] max-h-[150px]">
+                      {sessionQrUrl ? (
+                        <img
+                          src={sessionQrUrl}
+                          alt="Lector de código"
+                          className="w-full h-full object-contain"
+                        />
+                      ) : (
+                        <div className="w-[130px] h-[130px] flex items-center justify-center bg-slate-50 border border-slate-100 rounded text-slate-400 font-bold text-xs animate-pulse">
+                          Cargando QR...
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="text-center space-y-1.5 w-full">
+                      <p className="text-[9px] font-mono text-indigo-700 bg-indigo-50/50 border border-indigo-100/60 py-1 px-2 rounded-lg select-all tracking-tight truncate max-w-full">
+                        {`${window.location.origin}/join?pin=${activePin}&game=${activeGameType}`}
+                      </p>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(`${window.location.origin}/join?pin=${activePin}&game=${activeGameType}`);
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        }}
+                        className="inline-flex items-center gap-1 bg-slate-50 border border-slate-200 hover:bg-slate-100 text-slate-600 transition-all font-sans font-bold px-2.5 py-1 rounded-lg text-[10px] cursor-pointer shadow-xs"
+                      >
+                        <Clipboard size={10} />
+                        <span>{copied ? "¡Copiado!" : "Copiar enlace"}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                </div>
+
               </div>
+
             </div>
           )}
 

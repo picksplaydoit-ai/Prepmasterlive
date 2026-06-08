@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Gamepad2, Tv, Users, ArrowLeft, GraduationCap, Laptop, Phone } from "lucide-react";
 import TeacherDashboard from "./components/TeacherDashboard";
 import QuestionnaireEditor from "./components/QuestionnaireEditor";
@@ -14,6 +14,23 @@ export default function App() {
   const [quizView, setQuizView] = useState<'dashboard' | 'editor' | 'importer'>('dashboard');
   const [editingQuiz, setEditingQuiz] = useState<Questionnaire | null>(null);
   const [importerGameType, setImporterGameType] = useState<'quiz_live' | 'exam_mode' | 'mexicanos' | 'jeopardy'>('quiz_live');
+
+  // URL-driven dynamic entry
+  const [urlPin, setUrlPin] = useState<string>("");
+  const [urlGame, setUrlGame] = useState<string>("");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pinParam = params.get("pin");
+    const gameParam = params.get("game");
+    if (pinParam) {
+      setUrlPin(pinParam);
+      if (gameParam) {
+        setUrlGame(gameParam);
+      }
+      setRole('student');
+    }
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans antialiased text-slate-800 flex flex-col justify-between" id="app-container">
@@ -172,7 +189,7 @@ export default function App() {
         {/* STUDENT CLIENT MOBILE PAD */}
         {role === 'student' && (
           <div className="w-full flex-1 flex flex-col justify-center py-4 animate-fade-in" id="student-workspace-container">
-            <StudentInterface />
+            <StudentInterface initialPin={urlPin} initialGame={urlGame} />
           </div>
         )}
       </main>

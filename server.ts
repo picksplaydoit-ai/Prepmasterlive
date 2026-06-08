@@ -2183,7 +2183,8 @@ io.on("connection", (socket: Socket) => {
         currentQuestionIndex: session.currentQuestionIndex,
         reconnected: true,
         gameMode: session.gameMode || "individual",
-        teams: session.teams || []
+        teams: session.teams || [],
+        gameType: (session as any).gameType || "quiz_live"
       });
 
       // Synchronize player with current game stage
@@ -2287,7 +2288,8 @@ io.on("connection", (socket: Socket) => {
       pin, 
       title: session.title,
       gameMode: session.gameMode || "individual",
-      teams: session.teams || []
+      teams: session.teams || [],
+      gameType: (session as any).gameType || "quiz_live"
     });
     
     // Notify host & other students

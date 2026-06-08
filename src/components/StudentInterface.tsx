@@ -7,11 +7,23 @@ import { socket } from "../lib/socket";
 import { Player, Team } from "../types";
 import { AvatarRenderer, AVATAR_LIST, AVATAR_CATEGORIES, getAvatarById } from "./AvatarCatalog";
 
-export default function StudentInterface() {
-  const [pin, setPin] = useState(() => localStorage.getItem("prepmaster_pin") || "");
+interface StudentInterfaceProps {
+  initialPin?: string;
+  initialGame?: string;
+}
+
+export default function StudentInterface({ initialPin, initialGame }: StudentInterfaceProps = {}) {
+  const [pin, setPin] = useState(() => initialPin || localStorage.getItem("prepmaster_pin") || "");
   const [name, setName] = useState(() => localStorage.getItem("prepmaster_name") || "");
   const [selectedAvatarId, setSelectedAvatarId] = useState(() => localStorage.getItem("prepmaster_avatar_id") || "cult_mariachi");
   const [activeCategory, setActiveCategory] = useState("Todos");
+
+  // Sync initial pin from QR link
+  useEffect(() => {
+    if (initialPin) {
+      setPin(initialPin);
+    }
+  }, [initialPin]);
   
   // Team selection states
   const [roomGameMode, setRoomGameMode] = useState<'individual' | 'teams'>('individual');
@@ -181,7 +193,7 @@ export default function StudentInterface() {
     });
 
     socket.on("player:join-error", (data: { message: string }) => {
-      setError(data.message);
+      setError("La partida ya no está disponible o el PIN no es válido.");
       setSubmitting(false);
       
       // If we got join error on active rejoin, clear invalid credentials gently
@@ -409,22 +421,36 @@ export default function StudentInterface() {
         )}
 
         <form onSubmit={handleJoin} className="space-y-4" id="form-student-join">
-          <div>
-            <label className="block text-[10px] uppercase font-sans font-extrabold tracking-wider text-slate-500 mb-1">
-              Código PIN de Partida
-            </label>
-            <input
-              type="text"
-              pattern="[0-9]*"
-              inputMode="numeric"
-              maxLength={6}
-              placeholder="Ej. 1234"
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-              className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-center text-xl font-bold tracking-widest text-indigo-700 outline-none transition-colors"
-              id="student-pin-input"
-            />
-          </div>
+          {initialPin ? (
+            <div className="bg-indigo-50 border-2 border-indigo-200 p-4 rounded-xl text-center space-y-1" id="qr-direct-entry-banner">
+              <span className="block text-[10px] uppercase font-sans font-black tracking-widest text-indigo-600">
+                🎫 Entrando a Partida
+              </span>
+              <div className="text-3xl font-black text-indigo-900 font-mono tracking-widest">
+                {pin}
+              </div>
+              <span className="text-[10px] text-slate-500 block font-semibold leading-normal">
+                ¡Escaneaste el QR! No necesitas escribir el PIN manualmente.
+              </span>
+            </div>
+          ) : (
+            <div>
+              <label className="block text-[10px] uppercase font-sans font-extrabold tracking-wider text-slate-500 mb-1">
+                Código PIN de Partida
+              </label>
+              <input
+                type="text"
+                pattern="[0-9]*"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="Ej. 1234"
+                value={pin}
+                onChange={(e) => setPin(e.target.value)}
+                className="w-full bg-slate-50 border-2 border-slate-200 focus:border-indigo-500 rounded-xl px-4 py-3 text-center text-xl font-bold tracking-widest text-indigo-700 outline-none transition-colors"
+                id="student-pin-input"
+              />
+            </div>
+          )}
 
           <div>
             <label className="block text-[10px] uppercase font-sans font-extrabold tracking-wider text-slate-500 mb-1">
