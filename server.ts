@@ -921,7 +921,8 @@ app.get("/api/session-results/:pin", (req, res) => {
       players: Object.values(session.players),
       answersHistory: session.answersHistory || [],
       gameMode: session.gameMode || "individual",
-      teams: session.teams || []
+      teams: session.teams || [],
+      examProgress: (session as any).examProgress || {}
     });
     return;
   }
@@ -1863,11 +1864,89 @@ io.on("connection", (socket: Socket) => {
   // Generic educational game message forwarding
   socket.on("game:host-message", (data: any) => {
     const { pin, event, ...payload } = data;
+    
+    // Support Prepmaster Live 2.1.3: Store exam status & questions on starting
+    if (event === "exam:start") {
+      const session = activeSessions[pin];
+      if (session) {
+        (session as any).examQuestions = payload.questions || [];
+        (session as any).examStarted = true;
+        (session as any).examStatus = "ongoing";
+        if (!(session as any).examProgress) {
+          (session as any).examProgress = {};
+        }
+      }
+    } else if (event === "exam:ended") {
+      const session = activeSessions[pin];
+      if (session) {
+        (session as any).examStatus = "completed";
+      }
+    }
+    
     io.to(`game:${pin}`).emit(event, payload);
   });
   
   socket.on("game:player-message", (data: any) => {
     const { pin, event, ...payload } = data;
+    
+    // Support Prepmaster Live 2.1.3: Save student progress & solutions on backend in real-time
+    if (event === "exam:player-progress" && pin) {
+      const session = activeSessions[pin];
+      if (session) {
+        if (!(session as any).examProgress) {
+          (session as any).examProgress = {};
+        }
+        
+        const studentPlayerId = payload.playerId || payload.socketId || socket.id;
+        const solvedCount = payload.solvedCount || 0;
+        const correctCount = payload.correctCount || 0;
+        const incorrectCount = payload.incorrectCount || 0;
+        const completed = !!payload.completed;
+        const timeTakenSeconds = payload.timeTakenSeconds || 0;
+        const answers = payload.answers || {};
+        
+        let status = "En progreso";
+        if (completed) {
+          status = "Terminado";
+        } else if (solvedCount === 0) {
+          status = "Pendiente";
+        }
+        
+        const totalQs = session.questions ? session.questions.length : (payload.totalQuestions || 0);
+        const percentage = totalQs > 0 ? Math.round((correctCount / totalQs) * 100) : 0;
+        
+        (session as any).examProgress[studentPlayerId] = {
+          playerId: studentPlayerId,
+          socketId: socket.id,
+          name: payload.name || (session.players[socket.id] ? session.players[socket.id].name : "Alumno"),
+          solvedCount,
+          correctCount,
+          incorrectCount,
+          percentage,
+          completed,
+          timeTakenSeconds,
+          status,
+          answers,
+          lastUpdated: Date.now()
+        };
+
+        const playerObj = Object.values(session.players).find(p => p.playerId === studentPlayerId) || session.players[socket.id];
+        if (playerObj) {
+          playerObj.score = percentage;
+          playerObj.answeredThisQuestion = completed;
+        }
+
+        io.to(`host:${pin}`).emit(event, { 
+          ...payload, 
+          socketId: socket.id,
+          playerId: studentPlayerId,
+          status,
+          percentage
+        });
+        return;
+      }
+    }
+    
     io.to(`host:${pin}`).emit(event, { ...payload, socketId: socket.id });
   });
 
@@ -2188,6 +2267,29 @@ io.on("connection", (socket: Socket) => {
 
       socket.join(`game:${pin}`);
 
+      let examState: any = null;
+      const isExamMode = (session as any).gameType === "exam_mode" || (session as any).examStarted;
+      if (isExamMode) {
+        const resolvedPlayerId2 = existingPlayer.playerId || existingPlayer.id;
+        const pProgress = (session as any).examProgress ? (session as any).examProgress[resolvedPlayerId2] : null;
+        if (pProgress) {
+          existingPlayer.score = pProgress.percentage || 0;
+          existingPlayer.answeredThisQuestion = pProgress.completed || false;
+        }
+        examState = {
+          examQuestions: (session as any).examQuestions || session.questions || [],
+          examAnswers: pProgress ? pProgress.answers : {},
+          examCompleted: pProgress ? pProgress.completed : false,
+          examTimeStart: pProgress ? Date.now() - (pProgress.timeTakenSeconds * 1000) : Date.now(),
+          solvedCount: pProgress ? pProgress.solvedCount : 0,
+          correctCount: pProgress ? pProgress.correctCount : 0,
+          incorrectCount: pProgress ? pProgress.incorrectCount : 0,
+          percentage: pProgress ? pProgress.percentage : 0,
+          timeTakenSeconds: pProgress ? pProgress.timeTakenSeconds : 0,
+          status: pProgress ? pProgress.status : "Pendiente"
+        };
+      }
+
       socket.emit("player:join-success", { 
         player: existingPlayer, 
         pin, 
@@ -2197,7 +2299,8 @@ io.on("connection", (socket: Socket) => {
         reconnected: true,
         gameMode: session.gameMode || "individual",
         teams: session.teams || [],
-        gameType: (session as any).gameType || "quiz_live"
+        gameType: (session as any).gameType || "quiz_live",
+        examState
       });
 
       // Synchronize player with current game stage
@@ -2247,8 +2350,8 @@ io.on("connection", (socket: Socket) => {
       return;
     }
 
-    // If it's a new player but the game is already in progress, deny access
-    if (session.status !== "lobby") {
+    // If it's a new player but the game is already in progress, deny access (except for Exam Mode)
+    if (session.status !== "lobby" && (session as any).gameType !== "exam_mode" && !(session as any).examStarted) {
       socket.emit("player:join-error", { message: "La partida ya ha comenzado y no puedes unirte como nuevo participante." });
       return;
     }
@@ -2296,13 +2399,36 @@ io.on("connection", (socket: Socket) => {
     session.players[socket.id] = player;
     socket.join(`game:${pin}`);
 
+    let examState: any = null;
+    const isExamMode = (session as any).gameType === "exam_mode" || (session as any).examStarted;
+    if (isExamMode) {
+      const pProgress = (session as any).examProgress ? (session as any).examProgress[resolvedPlayerId] : null;
+      if (pProgress) {
+        player.score = pProgress.percentage || 0;
+        player.answeredThisQuestion = pProgress.completed || false;
+      }
+      examState = {
+        examQuestions: (session as any).examQuestions || session.questions || [],
+        examAnswers: pProgress ? pProgress.answers : {},
+        examCompleted: pProgress ? pProgress.completed : false,
+        examTimeStart: pProgress ? Date.now() - (pProgress.timeTakenSeconds * 1000) : Date.now(),
+        solvedCount: pProgress ? pProgress.solvedCount : 0,
+        correctCount: pProgress ? pProgress.correctCount : 0,
+        incorrectCount: pProgress ? pProgress.incorrectCount : 0,
+        percentage: pProgress ? pProgress.percentage : 0,
+        timeTakenSeconds: pProgress ? pProgress.timeTakenSeconds : 0,
+        status: pProgress ? pProgress.status : "Pendiente"
+      };
+    }
+
     socket.emit("player:join-success", { 
       player, 
       pin, 
       title: session.title,
       gameMode: session.gameMode || "individual",
       teams: session.teams || [],
-      gameType: (session as any).gameType || "quiz_live"
+      gameType: (session as any).gameType || "quiz_live",
+      examState
     });
     
     // Notify host & other students

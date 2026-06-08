@@ -7,6 +7,26 @@ import { socket } from "../lib/socket";
 import { Player, Team } from "../types";
 import { AvatarRenderer, AVATAR_LIST, AVATAR_CATEGORIES, getAvatarById } from "./AvatarCatalog";
 
+function deterministicShuffle<T>(array: T[], seedStr: string): T[] {
+  const arr = [...array];
+  let seed = 0;
+  for (let i = 0; i < seedStr.length; i++) {
+    seed = (seed << 5) - seed + seedStr.charCodeAt(i);
+    seed |= 0;
+  }
+  const random = () => {
+    const x = Math.sin(seed++) * 10000;
+    return x - Math.floor(x);
+  };
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    const temp = arr[i];
+    arr[i] = arr[j];
+    arr[j] = temp;
+  }
+  return arr;
+}
+
 interface StudentInterfaceProps {
   initialPin?: string;
   initialGame?: string;
@@ -64,6 +84,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
   const [examAnswers, setExamAnswers] = useState<Record<number, number>>({}); 
   const [examTimeStart, setExamTimeStart] = useState<number>(0);
   const [examCompleted, setExamCompleted] = useState(false);
+  const [examTimeTaken, setExamTimeTaken] = useState<number | null>(null);
 
   // Active question details for student view
   const [activeQuestion, setActiveQuestion] = useState<{
@@ -163,6 +184,35 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       if (data.gameType) {
         setActiveGameType(data.gameType);
       }
+
+      // 2.1.3: Recover detailed Exam Progress state on reconnect or join
+      if ((data as any).examState) {
+        const estate = (data as any).examState;
+        const sId = data.player.playerId || localStorage.getItem("prepmaster_player_id") || "random_player";
+        const shuffled = deterministicShuffle(estate.examQuestions || [], sId);
+        setExamQuestions(shuffled);
+        setExamAnswers(estate.examAnswers || {});
+        setExamCompleted(estate.examCompleted || false);
+        setExamTimeStart(estate.examTimeStart || Date.now());
+        if (estate.examCompleted) {
+          setExamTimeTaken(estate.timeTakenSeconds || 0);
+        }
+
+        const answeredCount = Object.keys(estate.examAnswers || {}).length;
+        const total = shuffled.length;
+        if (estate.examCompleted || answeredCount >= total) {
+          setExamCurrentQuestionIndex(0);
+        } else {
+          let firstUnanswered = 0;
+          for (let i = 0; i < total; i++) {
+            if (estate.examAnswers[i] === undefined) {
+              firstUnanswered = i;
+              break;
+            }
+          }
+          setExamCurrentQuestionIndex(firstUnanswered);
+        }
+      }
       
       if (data.status) {
         setCurrentStatus(data.status);
@@ -245,11 +295,14 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
     // Exam Mode Listeners
     socket.on("exam:start", (data: { totalQuestions: number; questions: any[] }) => {
       setActiveGameType("exam");
-      setExamQuestions(data.questions || []);
+      const sId = playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player";
+      const shuffled = deterministicShuffle(data.questions || [], sId);
+      setExamQuestions(shuffled);
       setExamCurrentQuestionIndex(0);
       setExamAnswers({});
       setExamTimeStart(Date.now());
       setExamCompleted(false);
+      setExamTimeTaken(null);
     });
 
     socket.on("exam:ended", () => {
@@ -1015,6 +1068,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
         let incorrectAttempts = 0;
         examQuestions.forEach((q, index) => {
           const optionChosen = examAnswers[index];
+          if (optionChosen === undefined) return;
           if (optionChosen === q.correctOption) {
             correctAttempts++;
           } else {
@@ -1022,8 +1076,9 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
           }
         });
         const totalQs = examQuestions.length;
+        const unansweredAttempts = Math.max(0, totalQs - correctAttempts - incorrectAttempts);
         const scorePercentage = totalQs > 0 ? Math.round((correctAttempts / totalQs) * 100) : 0;
-        const durationSeconds = Math.round((Date.now() - examTimeStart) / 1000);
+        const durationSeconds = examTimeTaken !== null ? examTimeTaken : Math.round((Date.now() - examTimeStart) / 1000);
 
         gameView = (
           <div className="bg-white border border-slate-200 rounded-3xl p-6 text-center space-y-6 text-slate-800 shadow-xl animate-fade-in" id="student-exam-complete-card">
@@ -1032,31 +1087,98 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
             </div>
             
             <div className="space-y-1 font-sans">
-              <h3 className="text-xl font-extrabold text-slate-800 leading-none">Examen Entregado</h3>
-              <p className="text-[11px] text-slate-450 mt-1 font-medium font-sans">Evaluación entregada con éxito al docente.</p>
+              <h3 className="text-xl font-extrabold text-slate-800 leading-none">✓ Examen Completado</h3>
+              <p className="text-[11px] text-slate-450 mt-1 font-medium font-sans">Tus respuestas han sido guardadas y registradas.</p>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 text-center pt-2">
-              <div className="bg-slate-50 border p-3 rounded-xl border-slate-150">
-                <span className="text-[9px] font-black uppercase text-slate-400 block font-mono">Calificación</span>
-                <span className="text-lg font-black font-mono text-indigo-700">{scorePercentage}%</span>
+            <div className="grid grid-cols-2 gap-2 text-center pt-1">
+              <div className="bg-indigo-50 border p-3 rounded-xl border-indigo-100">
+                <span className="text-[9px] font-black uppercase text-indigo-400 block font-mono">Calificación</span>
+                <span className="text-xl font-black font-mono text-indigo-800">{scorePercentage}%</span>
               </div>
               <div className="bg-slate-50 border p-3 rounded-xl border-slate-150">
                 <span className="text-[9px] font-black uppercase text-slate-400 block font-mono">Tiempo</span>
-                <span className="text-lg font-black font-mono text-slate-700">{durationSeconds}s</span>
+                <span className="text-xl font-black font-mono text-slate-700">{durationSeconds}s</span>
               </div>
-              <div className="bg-slate-50 border p-3 rounded-xl border-slate-150">
-                <span className="text-[9px] font-black uppercase text-slate-400 block font-mono">Aciertos</span>
-                <span className="text-lg font-black font-mono text-emerald-650">{correctAttempts}</span>
+              <div className="bg-emerald-50 border p-3 rounded-xl border-emerald-100">
+                <span className="text-[9px] font-black uppercase text-emerald-500 block font-mono">Aciertos</span>
+                <span className="text-xl font-black font-mono text-emerald-650">{correctAttempts}</span>
               </div>
-              <div className="bg-slate-50 border p-3 rounded-xl border-slate-150">
-                <span className="text-[9px] font-black uppercase text-slate-400 block font-mono">Errores</span>
-                <span className="text-lg font-black font-mono text-rose-500">{incorrectAttempts}</span>
+              <div className="bg-rose-50 border p-3 rounded-xl border-rose-100">
+                <span className="text-[9px] font-black uppercase text-rose-400 block font-mono">Errores</span>
+                <span className="text-xl font-black font-mono text-rose-650">{incorrectAttempts}</span>
               </div>
+              {unansweredAttempts > 0 && (
+                <div className="bg-amber-50 border p-3 rounded-xl border-amber-100 col-span-2">
+                  <span className="text-[9px] font-black uppercase text-amber-500 block font-mono">Sin responder</span>
+                  <span className="text-xl font-black font-mono text-amber-600">{unansweredAttempts}</span>
+                </div>
+              )}
             </div>
 
-            <p className="text-[10px] text-slate-400 leading-normal font-sans italic">
-              Puedes conservar tu pantalla aquí. Tu profesor descargará la planilla general de notas.
+            {/* Retroalimentación list of all reactivos */}
+            <div className="space-y-4 text-left pt-4 border-t border-slate-150 max-h-[350px] overflow-y-auto pr-1" id="student-exam-retro-section">
+              <h4 className="text-xs font-black text-slate-900 uppercase tracking-wide flex items-center gap-1.5">
+                <span>📝 Detalles de tu Evaluación</span>
+              </h4>
+              
+              {examQuestions.map((q, idx) => {
+                const chosenOptIdx = examAnswers[idx];
+                const isCorrect = chosenOptIdx === q.correctOption;
+                const isUnanswered = chosenOptIdx === undefined;
+                
+                let flagColor = "text-amber-700 bg-amber-50 border-amber-150";
+                let flagText = "Sin Responder";
+                if (!isUnanswered) {
+                  if (isCorrect) {
+                    flagColor = "text-emerald-700 bg-emerald-50 border-emerald-200";
+                    flagText = "Correcta";
+                  } else {
+                    flagColor = "text-rose-700 bg-rose-50 border-rose-200";
+                    flagText = "Incorrecta";
+                  }
+                }
+
+                return (
+                  <div key={idx} className="bg-slate-50/80 border border-slate-200 rounded-2xl p-4 space-y-2 text-xs" id={`retro-q-${idx}`}>
+                    <div className="flex justify-between items-center pb-1 border-b border-slate-100">
+                      <span className="font-extrabold text-slate-450 font-mono text-[9px]">Reactivo {idx + 1} de {examQuestions.length}</span>
+                      <span className={`px-2 py-0.5 rounded-full font-black uppercase text-[8px] border shrink-0 ${flagColor}`}>{flagText}</span>
+                    </div>
+                    
+                    <p className="font-extrabold text-slate-900 leading-normal font-sans pt-1">
+                      {q.text}
+                    </p>
+                    
+                    <div className="space-y-1.5 pt-1.5">
+                      <div className="flex items-start gap-1 p-2 rounded-xl bg-slate-100 text-slate-700 border border-slate-150/40">
+                        <span className="font-bold shrink-0">Tu Respuesta:</span>{" "}
+                        <span className={`font-black uppercase ${isUnanswered ? "text-amber-600" : isCorrect ? "text-emerald-700" : "text-rose-700"}`}>
+                          {isUnanswered ? "Ninguna" : q.options[chosenOptIdx]}
+                        </span>
+                      </div>
+                      
+                      {!isCorrect && (
+                        <div className="flex items-start gap-1 p-2 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-100">
+                          <span className="font-bold text-emerald-700 shrink-0">Respuesta Correcta:</span>{" "}
+                          <span className="font-black uppercase text-emerald-750">{q.options[q.correctOption]}</span>
+                        </div>
+                      )}
+                      
+                      {q.feedback && q.feedback.trim() && (
+                        <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-2.5 mt-2 text-[10.5px] text-indigo-900 leading-relaxed italic">
+                          <span className="font-black not-italic text-indigo-950 block mb-0.5">Explicación:</span>
+                          {q.feedback}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <p className="text-[10px] text-slate-400 leading-normal font-sans italic pt-2">
+              Puedes conservar esta pantalla. Tu profesor puede ver tu reporte detallado y exportar las notas.
             </p>
           </div>
         );
@@ -1065,7 +1187,6 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
         const selectedIndex = examAnswers[examCurrentQuestionIndex];
 
         const handleChooseOption = (optIdx: number) => {
-          if (isSelected) return;
           const newAnswers = { ...examAnswers, [examCurrentQuestionIndex]: optIdx };
           setExamAnswers(newAnswers);
 
@@ -1081,20 +1202,27 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
             }
           });
 
+          const isReallyAllCompleted = Object.keys(newAnswers).length >= examQuestions.length;
+          const currentDuration = Math.round((Date.now() - examTimeStart) / 1000);
+
           socket.emit("game:player-message", {
             pin: joinedPin,
             event: "exam:player-progress",
+            playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
+            name: name || localStorage.getItem("prepmaster_name") || "Alumno",
             solvedCount: Object.keys(newAnswers).length,
             correctCount: correctAttempts,
             incorrectCount: incorrectAttempts,
-            completed: Object.keys(newAnswers).length >= examQuestions.length,
-            timeTakenSeconds: Math.round((Date.now() - examTimeStart) / 1000)
+            completed: isReallyAllCompleted,
+            timeTakenSeconds: currentDuration,
+            answers: newAnswers,
+            totalQuestions: examQuestions.length
           });
         };
 
         gameView = (
           <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 space-y-5 shadow-xl animate-fade-in" id="student-exam-active-card">
-            <div className="flex justify-between items-center text-xs text-slate-400 border-b border-rose-50 pb-3">
+            <div className="flex justify-between items-center text-xs text-slate-450 border-b border-rose-50 pb-3">
               <span className="font-extrabold uppercase text-[10px] tracking-wide text-rose-600 bg-rose-50 border border-rose-100 px-2 rounded">Examen Individual</span>
               <span className="font-mono font-bold">Reactivo {examCurrentQuestionIndex + 1} de {examQuestions.length}</span>
             </div>
@@ -1106,30 +1234,26 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
             <div className="space-y-2.5 pt-1">
               {currentQ.options.map((opt: string, idx: number) => {
                 if (!opt || !opt.trim()) return null;
-                const blockSelection = isSelected;
                 const wasChosen = selectedIndex === idx;
                 
                 return (
                   <button
                     key={idx}
                     onClick={() => handleChooseOption(idx)}
-                    disabled={blockSelection}
                     className={`w-full p-4 rounded-xl text-left text-xs font-bold leading-normal border shadow-sm transition-all flex items-center justify-between cursor-pointer ${
                       wasChosen 
-                        ? "bg-indigo-650 border-indigo-700 text-white font-extrabold" 
-                        : blockSelection 
-                          ? "bg-slate-50 border-slate-100 text-slate-350 opacity-40 select-none cursor-not-allowed" 
-                          : "bg-white border-slate-150 hover:bg-slate-50 text-slate-850"
+                        ? "bg-indigo-50 border-2 border-indigo-650 text-indigo-950 font-black shadow-md ring-1 ring-indigo-600 scale-[1.01]" 
+                        : "bg-white border-slate-200 hover:bg-slate-105 hover:border-slate-350 text-slate-900 font-bold"
                     }`}
                   >
                     <span>{opt}</span>
-                    {wasChosen && <span className="text-[10px] bg-indigo-750 text-white px-2 py-0.5 rounded font-bold uppercase shrink-0 font-mono text-center">Marcada</span>}
+                    {wasChosen && <span className="text-[10px] bg-indigo-600 text-white px-2 py-0.5 rounded font-black uppercase shrink-0 font-mono text-center">Marcada</span>}
                   </button>
                 );
               })}
             </div>
 
-            <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+            <div className="flex justify-between items-center pt-3 border-t border-slate-100 animate-fade-in">
               <button
                 onClick={() => setExamCurrentQuestionIndex(prev => Math.max(0, prev - 1))}
                 disabled={examCurrentQuestionIndex === 0}
@@ -1138,14 +1262,55 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
                 Anterior
               </button>
 
-              <button
-                onClick={() => setExamCurrentQuestionIndex(prev => Math.min(examQuestions.length - 1, prev + 1))}
-                disabled={examCurrentQuestionIndex === examQuestions.length - 1 || !isSelected}
-                className="px-4.5 py-2 text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl cursor-pointer disabled:opacity-30 flex items-center gap-1.5 animate-pulse"
-              >
-                <span>Siguiente</span>
-                <ArrowRight size={13} />
-              </button>
+              {examCurrentQuestionIndex === examQuestions.length - 1 ? (
+                <button
+                  onClick={() => {
+                    const finalDuration = Math.round((Date.now() - examTimeStart) / 1000);
+                    setExamCompleted(true);
+                    setExamTimeTaken(finalDuration);
+
+                    let correctAttempts = 0;
+                    let incorrectAttempts = 0;
+                    examQuestions.forEach((q, index) => {
+                      const optionChosen = examAnswers[index];
+                      if (optionChosen === undefined) return;
+                      if (optionChosen === q.correctOption) {
+                        correctAttempts++;
+                      } else {
+                        incorrectAttempts++;
+                      }
+                    });
+
+                    socket.emit("game:player-message", {
+                      pin: joinedPin,
+                      event: "exam:player-progress",
+                      playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
+                      name: name || localStorage.getItem("prepmaster_name") || "Alumno",
+                      solvedCount: Object.keys(examAnswers).length,
+                      correctCount: correctAttempts,
+                      incorrectCount: incorrectAttempts,
+                      completed: true,
+                      timeTakenSeconds: finalDuration,
+                      answers: examAnswers,
+                      totalQuestions: examQuestions.length
+                    });
+                  }}
+                  disabled={!isSelected}
+                  className="px-6 py-2 text-xs font-black bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl cursor-pointer disabled:opacity-30 flex items-center gap-1.5 shadow-md animate-pulse"
+                >
+                  <span>Finalizar Examen</span>
+                  <Check size={13} />
+                </button>
+              ) : (
+                <button
+                  onClick={() => setExamCurrentQuestionIndex(prev => Math.min(examQuestions.length - 1, prev + 1))}
+                  disabled={!isSelected}
+                  className="px-4.5 py-2 text-xs font-black bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl cursor-pointer disabled:opacity-30 flex items-center gap-1.5"
+                >
+                  <span>Siguiente</span>
+                  <ArrowRight size={13} />
+                </button>
+              )}
             </div>
           </div>
         );

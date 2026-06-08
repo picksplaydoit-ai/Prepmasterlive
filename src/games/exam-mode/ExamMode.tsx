@@ -27,6 +27,7 @@ interface ExamModeProps {
 }
 
 interface StudentExamProgress {
+  playerId?: string;
   socketId: string;
   name: string;
   solvedCount: number;
@@ -35,6 +36,8 @@ interface StudentExamProgress {
   percentage: number;
   completed: boolean;
   timeTakenSeconds: number;
+  answers?: Record<number, number>;
+  status?: string;
 }
 
 export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, connInfo }: ExamModeProps) {
@@ -101,58 +104,151 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
     return () => clearInterval(interval);
   }, [examStatus]);
 
-  // Sync initial players list from lobby
+  // Rehydrate exist progress on mount
   useEffect(() => {
-    const progress: Record<string, StudentExamProgress> = {};
-    players.forEach(p => {
-      progress[p.id] = {
-        socketId: p.id,
-        name: p.name,
-        solvedCount: 0,
-        correctCount: 0,
-        incorrectCount: 0,
-        percentage: 0,
-        completed: false,
-        timeTakenSeconds: 0
-      };
+    fetch(`/api/session-results/${pin}`)
+      .then(res => {
+        if (res.ok) return res.json();
+        throw new Error("Failed to fetch session progress");
+      })
+      .then(data => {
+        if (data && data.examProgress) {
+          setExamProgress(prev => {
+            const nextProgress = { ...prev };
+            // Copy loaded progress from server
+            Object.keys(data.examProgress).forEach(pId => {
+              const item = data.examProgress[pId];
+              nextProgress[pId] = {
+                playerId: pId,
+                socketId: item.socketId || "",
+                name: item.name || "Alumno",
+                solvedCount: item.solvedCount || 0,
+                correctCount: item.correctCount || 0,
+                incorrectCount: item.incorrectCount || 0,
+                percentage: item.percentage || 0,
+                completed: item.completed || false,
+                timeTakenSeconds: item.timeTakenSeconds || 0,
+                answers: item.answers,
+                status: item.status || "Pendiente"
+              };
+            });
+            // Ensure any live players in lobby are also represented
+            players.forEach(p => {
+              const idToUse = p.playerId || p.id;
+              if (!nextProgress[idToUse]) {
+                nextProgress[idToUse] = {
+                  playerId: idToUse,
+                  socketId: p.id,
+                  name: p.name,
+                  solvedCount: 0,
+                  correctCount: 0,
+                  incorrectCount: 0,
+                  percentage: 0,
+                  completed: false,
+                  timeTakenSeconds: 0,
+                  status: "Pendiente"
+                };
+              }
+            });
+            return nextProgress;
+          });
+        }
+      })
+      .catch(err => {
+        console.error("Error fetching session results on mount:", err);
+      });
+  }, [pin]);
+
+  // Sync initial players list from lobby, preserving existing progress
+  useEffect(() => {
+    setExamProgress(prev => {
+      const nextProgress = { ...prev };
+      players.forEach(p => {
+        const idToUse = p.playerId || p.id;
+        if (!nextProgress[idToUse]) {
+          nextProgress[idToUse] = {
+            playerId: idToUse,
+            socketId: p.id,
+            name: p.name,
+            solvedCount: 0,
+            correctCount: 0,
+            incorrectCount: 0,
+            percentage: 0,
+            completed: false,
+            timeTakenSeconds: 0,
+            status: "Pendiente"
+          };
+        } else {
+          // preserve progress, just keep newest socketId updated
+          nextProgress[idToUse].socketId = p.id;
+          nextProgress[idToUse].name = p.name; // preserve latest renamed if any
+        }
+      });
+      return nextProgress;
     });
-    setExamProgress(progress);
   }, [players]);
 
   // Listen to live student progress updates or completions via socket.io
   useEffect(() => {
     // Student sent answers updates back to host as part of local asynchrony
-    const handleProgressUpdate = (data: { socketId: string; solvedCount: number; correctCount: number; incorrectCount: number; completed: boolean; timeTakenSeconds: number }) => {
-      const student = examProgress[data.socketId];
-      if (!student) return;
+    const handleProgressUpdate = (data: { 
+      socketId: string; 
+      playerId?: string; 
+      name?: string; 
+      solvedCount: number; 
+      correctCount: number; 
+      incorrectCount: number; 
+      completed: boolean; 
+      timeTakenSeconds: number;
+      answers?: any;
+    }) => {
+      const idToUse = data.playerId || data.socketId;
+      
+      setExamProgress(prev => {
+        const student = prev[idToUse];
+        const prevCompleted = student ? student.completed : false;
 
-      const totalQs = quiz.questions.length;
-      const percentage = totalQs > 0 ? Math.round((data.correctCount / totalQs) * 100) : 0;
+        const totalQs = quiz.questions.length;
+        const percentage = totalQs > 0 ? Math.round((data.correctCount / totalQs) * 100) : 0;
 
-      setExamProgress(prev => ({
-        ...prev,
-        [data.socketId]: {
-          ...prev[data.socketId],
-          solvedCount: data.solvedCount,
-          correctCount: data.correctCount,
-          incorrectCount: data.incorrectCount,
-          percentage,
-          completed: data.completed,
-          timeTakenSeconds: data.timeTakenSeconds
+        let solvedStatus = "En progreso";
+        if (data.completed) {
+          solvedStatus = "Terminado";
+        } else if (data.solvedCount === 0) {
+          solvedStatus = "Pendiente";
         }
-      }));
 
-      // Play neat blip sound on completion
-      if (data.completed && !student.completed) {
-        playGameSound("correcta");
-      }
+        const nextProgress = {
+          ...prev,
+          [idToUse]: {
+            playerId: idToUse,
+            socketId: data.socketId,
+            name: data.name || (student ? student.name : "Alumno"),
+            solvedCount: data.solvedCount,
+            correctCount: data.correctCount,
+            incorrectCount: data.incorrectCount,
+            percentage,
+            completed: data.completed,
+            timeTakenSeconds: data.timeTakenSeconds,
+            answers: data.answers || (student ? student.answers : {}),
+            status: solvedStatus
+          }
+        };
+
+        // Play neat blip sound on completion
+        if (data.completed && !prevCompleted) {
+          playGameSound("correcta");
+        }
+
+        return nextProgress;
+      });
     };
 
     socket.on("exam:player-progress", handleProgressUpdate);
     return () => {
       socket.off("exam:player-progress", handleProgressUpdate);
     };
-  }, [examProgress, quiz]);
+  }, [quiz]);
 
   const handleStartExam = () => {
     setExamStatus('ongoing');
@@ -194,16 +290,25 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
     const list = Object.values(examProgress) as StudentExamProgress[];
     
     // Prepare standard grid row schema
-    const rows = list.map((student, idx) => ({
-      "No.": idx + 1,
-      "Nombre de Alumno": student.name,
-      "Reactivos Resueltos": student.solvedCount,
-      "Aciertos (Correctas)": student.correctCount,
-      "Errores (Incorrectas)": student.incorrectCount,
-      "Calificación (%)": `${student.percentage}%`,
-      "Tiempo de Resolución": `${student.timeTakenSeconds}s`,
-      "Estado": student.completed ? "Completado" : "Pendiente"
-    }));
+    const rows = list.map((student, idx) => {
+      let currentStatus = "Pendiente";
+      if (student.completed || student.status === "Terminado") {
+        currentStatus = "Terminado";
+      } else if (student.solvedCount > 0 || student.status === "En progreso") {
+        currentStatus = "En progreso";
+      }
+
+      return {
+        "No.": idx + 1,
+        "Nombre de Alumno": student.name,
+        "Reactivos Resueltos": student.solvedCount,
+        "Aciertos (Correctas)": student.correctCount,
+        "Errores (Incorrectas)": student.incorrectCount,
+        "Calificación (%)": `${student.percentage}%`,
+        "Tiempo de Resolución": `${student.timeTakenSeconds}s`,
+        "Estado": currentStatus
+      };
+    });
 
     // Generate sheet & workbook
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -499,7 +604,7 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="exam-classroom-progress">
             {(Object.values(examProgress) as StudentExamProgress[]).map(p => (
               <div 
-                key={p.socketId}
+                key={p.playerId || p.socketId}
                 className={`p-4 rounded-xl border flex items-center justify-between gap-4 transition-all ${
                   p.completed 
                     ? "bg-emerald-50/50 border-emerald-250 text-emerald-900" 
