@@ -10,6 +10,9 @@ import { Questionnaire, Player, GameSession, PlayerAnswersCount, Team } from "..
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import { AvatarRenderer, getAvatarById } from "./AvatarCatalog";
+import Mexicanos from "../games/100-mexicanos/Mexicanos";
+import JeopardyGame from "../games/jeopardy/JeopardyGame";
+import ExamMode from "../games/exam-mode/ExamMode";
 
 interface TeacherDashboardProps {
   onCreateNew: () => void;
@@ -70,6 +73,12 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
     { id: "team_mariachis", name: "Mariachis", icon: "🎺", color: "#f59e0b" },
     { id: "team_tortas", name: "Tortas Ahogadas", icon: "🥖", color: "#f97316" }
   ]);
+
+  // Platform multi-game modes (2.0.0)
+  const [activeGameType, setActiveGameType] = useState<'quiz_live' | 'mexicanos' | 'jeopardy' | 'exam'>('quiz_live');
+  const [hostingGameType, setHostingGameType] = useState<'quiz_live' | 'mexicanos' | 'jeopardy' | 'exam'>('quiz_live');
+  const [selectedDashboardGame, setSelectedDashboardGame] = useState<'quiz_live' | 'mexicanos' | 'jeopardy' | 'exam' | null>(null);
+  const [activeQuiz, setActiveQuiz] = useState<Questionnaire | null>(null);
 
   // Podium (Final stand)
   const [podium, setPodium] = useState<Player[]>([]);
@@ -182,6 +191,7 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
     setGameTitle(targetQuiz.title);
     setTotalQuestionsCount(targetQuiz.questions.length);
+    setActiveQuiz(targetQuiz);
     setPlayersList([]);
     setRevealData(null);
     setLeaderboard([]);
@@ -191,7 +201,8 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
     socket.emit("host:create-session", { 
       questionnaireId: hostingQuizId,
       gameMode: setupGameMode,
-      teams: setupGameMode === "teams" ? setupTeams : []
+      teams: setupGameMode === "teams" ? setupTeams : [],
+      gameType: hostingGameType
     });
 
     setHostingQuizId(null);
@@ -225,7 +236,16 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
   // Socket listener setup
   useEffect(() => {
-    socket.on("session:created", (data: { pin: string; title: string; questionsCount: number; players: Player[]; gameMode?: 'individual' | 'teams'; teams?: Team[] }) => {
+    socket.on("session:created", (data: { 
+      pin: string; 
+      title: string; 
+      questionsCount: number; 
+      players: Player[]; 
+      gameMode?: 'individual' | 'teams'; 
+      teams?: Team[];
+      gameType?: any;
+      questionnaireId?: string;
+    }) => {
       setActivePin(data.pin);
       setGameTitle(data.title);
       setTotalQuestionsCount(data.questionsCount);
@@ -235,6 +255,15 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
       setActiveTeams(data.teams || []);
       setTeamRankings([]);
       setTeamStats(null);
+      if (data.gameType) {
+        setActiveGameType(data.gameType);
+      }
+      
+      // Resolve activeQuiz reference
+      const found = quizzes.find(q => q.id === data.questionnaireId || q.title === data.title);
+      if (found) {
+        setActiveQuiz(found);
+      }
     });
 
     socket.on("player:joined-list", (data: { players: Player[] }) => {
@@ -710,6 +739,62 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
   // If a game is active, render the dedicated Game Console
   if (activePin && gameStatus) {
+    const resolvedActiveQuiz = activeQuiz || quizzes.find(q => q.title === gameTitle) || quizzes[0];
+
+    if (activeGameType === "mexicanos") {
+      return (
+        <Mexicanos 
+          quiz={resolvedActiveQuiz} 
+          pin={activePin} 
+          players={playersList} 
+          teams={activeTeams} 
+          onBackToMenu={() => {
+            if (window.confirm("¿Seguro que deseas concluir esta partida de 100 Mexicanos Dijeron?")) {
+              socket.emit("host:end-game", { pin: activePin });
+              setActivePin(null);
+              setGameStatus(null);
+            }
+          }} 
+        />
+      );
+    }
+
+    if (activeGameType === "jeopardy") {
+      return (
+        <JeopardyGame 
+          quiz={resolvedActiveQuiz} 
+          pin={activePin} 
+          players={playersList} 
+          teams={activeTeams} 
+          onBackToMenu={() => {
+            if (window.confirm("¿Seguro que deseas concluir esta partida de Jeopardy?")) {
+              socket.emit("host:end-game", { pin: activePin });
+              setActivePin(null);
+              setGameStatus(null);
+            }
+          }} 
+        />
+      );
+    }
+
+    if (activeGameType === "exam") {
+      return (
+        <ExamMode 
+          quiz={resolvedActiveQuiz} 
+          pin={activePin} 
+          players={playersList} 
+          teams={activeTeams} 
+          onBackToMenu={() => {
+            if (window.confirm("¿Seguro que deseas concluir esta sesión de examen individual?")) {
+              socket.emit("host:end-game", { pin: activePin });
+              setActivePin(null);
+              setGameStatus(null);
+            }
+          }} 
+        />
+      );
+    }
+
     const isLobby = gameStatus === "lobby";
     const isCountdown = gameStatus === "countdown";
     const isQuestion = gameStatus === "question";
@@ -1549,39 +1634,185 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
   }
 
   // STANDARD LOBBY PANEL / QUIZZES MANAGER
+  if (!selectedDashboardGame) {
+    return (
+      <div className="space-y-6" id="prepmaster-live-platform-dashboard">
+        
+        {/* Beautiful Geometric Balance Header */}
+        <div className="bg-slate-900 border border-slate-800 p-6 sm:p-8 rounded-3xl text-left relative overflow-hidden shadow-xl" id="platform-banner">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-650/11 rounded-full blur-3xl -mr-10 -mt-10"></div>
+          <div className="absolute bottom-0 left-0 w-32 h-32 bg-emerald-500/10 rounded-full blur-2xl -ml-10 -mb-10"></div>
+
+          <div className="space-y-1.5 relative z-10">
+            <span className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[9px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full inline-block">
+              ★ Prepmaster v2.0.0
+            </span>
+            <h1 className="text-2xl sm:text-3xl font-black text-white font-sans tracking-tight">PREPMASTER LIVE</h1>
+            <p className="text-slate-400 text-xs sm:text-sm max-w-xl">
+              Bienvenido al centro interactivo de gamificación local. Transforma tus reactivos en emocionantes juegos interactivos multilaterales sin dependencias de internet.
+            </p>
+          </div>
+        </div>
+
+        {/* 4 Interactive Modular Games Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6" id="platform-games-grid">
+          
+          {/* Card 1: Quiz Live */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 flex flex-col justify-between hover:border-indigo-500 hover:shadow-lg transition-all duration-150 relative group">
+            <div className="space-y-3">
+              <div className="w-12 h-12 bg-indigo-50 border border-indigo-150 text-indigo-600 rounded-2xl flex items-center justify-center text-2xl shadow-xs">
+                🎯
+              </div>
+              <h3 className="text-lg font-black text-slate-800 font-sans">Quiz Live</h3>
+              <p className="text-xs text-slate-500 leading-relaxed font-sans">
+                El clásico juego de opción múltiple con tiempo límite y tabla de posiciones. Perfecto para revivir la competitividad sana y repasar conceptos de forma colectiva.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setSelectedDashboardGame("quiz_live");
+                setHostingGameType("quiz_live");
+              }}
+              className="mt-6 w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <span>Crear Juego</span>
+              <ArrowRight size={13} />
+            </button>
+          </div>
+
+          {/* Card 2: 100 Mexicanos Dijeron */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 flex flex-col justify-between hover:border-amber-500 hover:shadow-lg transition-all duration-150 relative group">
+            <div className="space-y-3">
+              <div className="w-12 h-12 bg-amber-50 border border-amber-150 text-amber-600 rounded-2xl flex items-center justify-center text-2xl shadow-xs">
+                🇲🇽
+              </div>
+              <h3 className="text-lg font-black text-slate-800 font-sans">100 Mexicanos Dijeron</h3>
+              <p className="text-xs text-slate-500 leading-relaxed font-sans">
+                Adivina las respuestas más comunes de encuestas colectivas. Permite configurar equipos, buzzer (timbre) interactivo, acumulación de puntos y límite de 3 errores.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setSelectedDashboardGame("mexicanos");
+                setHostingGameType("mexicanos");
+              }}
+              className="mt-6 w-full py-3 bg-amber-600 hover:bg-amber-700 text-slate-950 font-black text-xs rounded-xl shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <span>Crear Juego</span>
+              <ArrowRight size={13} />
+            </button>
+          </div>
+
+          {/* Card 3: Jeopardy */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 flex flex-col justify-between hover:border-indigo-600 hover:shadow-lg transition-all duration-150 relative group">
+            <div className="space-y-3">
+              <div className="w-12 h-12 bg-indigo-50 border border-indigo-150 text-indigo-700 rounded-2xl flex items-center justify-center text-2xl shadow-xs">
+                🧠
+              </div>
+              <h3 className="text-lg font-black text-slate-800 font-sans">Jeopardy</h3>
+              <p className="text-xs text-slate-500 leading-relaxed font-sans">
+                Explora un gran tablero modular dividido por puntajes y categorías. Los equipos piden desafíos de 200 a 1000 puntos y marcan sus logros en tiempo real.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setSelectedDashboardGame("jeopardy");
+                setHostingGameType("jeopardy");
+              }}
+              className="mt-6 w-full py-3 bg-indigo-650 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <span>Crear Juego</span>
+              <ArrowRight size={13} />
+            </button>
+          </div>
+
+          {/* Card 4: Modo Examen */}
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 flex flex-col justify-between hover:border-emerald-600 hover:shadow-lg transition-all duration-150 relative group">
+            <div className="space-y-3">
+              <div className="w-12 h-12 bg-emerald-50 border border-emerald-150 text-emerald-600 rounded-2xl flex items-center justify-center text-2xl shadow-xs">
+                📝
+              </div>
+              <h3 className="text-lg font-black text-slate-800 font-sans">Modo Examen</h3>
+              <p className="text-xs text-slate-500 leading-relaxed font-sans">
+                Sin ranking, sin podio y a tiempo libre. Evalúa de forma silenciosa e individual. Descarga planillas interactivas automatizadas directo en Microsoft Excel.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setSelectedDashboardGame("exam");
+                setHostingGameType("exam");
+              }}
+              className="mt-6 w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+            >
+              <span>Crear Juego</span>
+              <ArrowRight size={13} />
+            </button>
+          </div>
+
+        </div>
+
+        {/* Persistent server IP footer */}
+        {connInfo && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col sm:flex-row justify-between items-center gap-4 shadow-sm bg-slate-50/50">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-indigo-50 border border-indigo-150 rounded-lg flex items-center justify-center text-indigo-600">
+                <Users size={20} />
+              </div>
+              <div className="text-left">
+                <span className="text-[9px] text-slate-400 font-mono uppercase font-bold block">IP de Red del Servidor</span>
+                <span className="text-xs font-bold text-slate-700 font-mono">{connInfo.preferredIP}</span>
+              </div>
+            </div>
+
+            <div className="text-center sm:text-right">
+              <span className="text-[10px] text-slate-400 block font-sans">Los alumnos se conectan en su celular usando la URL:</span>
+              <span className="text-xs font-bold text-indigo-600 font-mono select-all bg-indigo-50 py-1 px-2.5 rounded border border-indigo-100">{connInfo.appUrl}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const getDashboardGameName = () => {
+    if (selectedDashboardGame === "quiz_live") return "Quiz Live";
+    if (selectedDashboardGame === "mexicanos") return "100 Mexicanos Dijeron";
+    if (selectedDashboardGame === "jeopardy") return "Jeopardy";
+    if (selectedDashboardGame === "exam") return "Modo Examen";
+    return "";
+  };
+
   return (
     <div className="space-y-6" id="teacher-dashboard-panel">
       
-      {/* Visual top hero banner */}
+      {/* Visual top hero banner with Back button */}
       <div className="bg-white border border-slate-200 p-6 sm:p-8 rounded-3xl flex flex-col md:flex-row justify-between items-start md:items-center gap-6 shadow-md shadow-slate-150/50">
         <div className="space-y-1.5">
-          <div className="flex items-center gap-1.5 text-indigo-600 font-mono text-xs uppercase font-extrabold tracking-widest">
+          <div className="flex items-center gap-1.5 text-indigo-650 font-mono text-xs uppercase font-extrabold tracking-widest">
             <Tv size={14} className="animate-pulse" />
-            <span>Servidor Offline Listo</span>
+            <span>Paso 2: Modo {getDashboardGameName()}</span>
           </div>
-          <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Cuestionarios Disponibles</h2>
+          <h2 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">Cuestionarios Coincidentes</h2>
           <p className="text-slate-500 text-xs sm:text-sm max-w-xl">
-            Inicia o edita cuestionarios de forma ágil, 100% offline sin consumir internet. La red local de la escuela se encargará de transmitir el juego.
+            Selecciona un cuestionario para inicializar tu sesión de <strong>{getDashboardGameName()}</strong> en el salón de clase.
           </p>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2.5 sm:gap-3 shrink-0 w-full md:w-auto">
           <button
-            onClick={onImport}
-            className="flex items-center justify-center gap-2 bg-slate-50 border border-slate-200 text-slate-700 hover:bg-slate-100 hover:text-indigo-600 font-sans font-bold px-5 py-3 rounded-xl shadow-sm transition-all text-xs sm:text-sm cursor-pointer"
-            id="btn-import-quiz"
+            onClick={() => setSelectedDashboardGame(null)}
+            className="flex items-center justify-center gap-2 bg-slate-150 text-slate-750 hover:bg-slate-200 font-sans font-extrabold px-5 py-3 rounded-xl shadow-xs transition-all text-xs cursor-pointer border border-slate-200"
           >
-            <ListPlus size={16} />
-            <span>Importar Reactivos</span>
+            <span>« Menú de Actividades</span>
           </button>
 
           <button
-            onClick={onCreateNew}
-            className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-3 rounded-xl font-bold font-sans shadow-md hover:shadow-lg transition-all active:scale-[0.98] text-xs sm:text-sm cursor-pointer"
-            id="btn-create-quiz"
+            onClick={onImport}
+            className="flex items-center justify-center gap-2 bg-slate-50 border border-slate-200 text-slate-750 hover:bg-slate-100 font-sans font-bold px-5 py-3 rounded-xl shadow-sm transition-all text-xs cursor-pointer"
+            id="btn-import-quiz"
           >
-            <Plus size={18} />
-            <span>Crear Cuestionario</span>
+            <ListPlus size={16} />
+            <span>Importar</span>
           </button>
         </div>
       </div>

@@ -45,9 +45,16 @@ db.exec(`
     players TEXT NOT NULL,
     answers TEXT NOT NULL,
     scores TEXT NOT NULL,
-    topicSummary TEXT NOT NULL
+    topicSummary TEXT NOT NULL,
+    game_type TEXT DEFAULT 'quiz_live'
   );
 `);
+
+try {
+  db.exec("ALTER TABLE game_history ADD COLUMN game_type TEXT DEFAULT 'quiz_live'");
+} catch (e) {
+  // Safe to ignore if column already exists
+}
 
 // Auto-migrate from any existing db.json to ensure no data loss
 function migrateFromJSON(): void {
@@ -336,8 +343,8 @@ function saveGameSessionHistory(session: GameSession): void {
     const scoresJSON = JSON.stringify(sortedPlayers);
 
     const insertHistory = db.prepare(`
-      INSERT OR REPLACE INTO game_history (id, questionnaire, date, players, answers, scores, topicSummary)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO game_history (id, questionnaire, date, players, answers, scores, topicSummary, game_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     insertHistory.run(
@@ -347,7 +354,8 @@ function saveGameSessionHistory(session: GameSession): void {
       playersJSON,
       answersJSON,
       scoresJSON,
-      JSON.stringify(finalTopicSummary)
+      JSON.stringify(finalTopicSummary),
+      (session as any).gameType || "quiz_live"
     );
 
     console.log(`[SQLite] Historial guardado para partida PIN ${pin}`);
@@ -1039,8 +1047,19 @@ function clearRoomInterval(pin: string): void {
 
 // Websocket Events
 io.on("connection", (socket: Socket) => {
+  // Generic educational game message forwarding
+  socket.on("game:host-message", (data: any) => {
+    const { pin, event, ...payload } = data;
+    io.to(`game:${pin}`).emit(event, payload);
+  });
+  
+  socket.on("game:player-message", (data: any) => {
+    const { pin, event, ...payload } = data;
+    io.to(`host:${pin}`).emit(event, { ...payload, socketId: socket.id });
+  });
+
   // Host initializes a session
-  socket.on("host:create-session", ({ questionnaireId, gameMode, teams }: { questionnaireId: string; gameMode?: 'individual' | 'teams'; teams?: Team[] }) => {
+  socket.on("host:create-session", ({ questionnaireId, gameMode, teams, gameType }: { questionnaireId: string; gameMode?: 'individual' | 'teams'; teams?: Team[]; gameType?: string }) => {
     const list = loadQuestionnaires();
     const quiz = list.find((q) => q.id === questionnaireId);
     if (!quiz) {
@@ -1067,6 +1086,7 @@ io.on("connection", (socket: Socket) => {
       gameMode: gameMode || "individual",
       teams: teams || []
     };
+    (session as any).gameType = gameType || "quiz_live";
 
     activeSessions[pin] = session;
     socket.join(`game:${pin}`);
@@ -1078,7 +1098,8 @@ io.on("connection", (socket: Socket) => {
       questionsCount: quiz.questions.length,
       players: [],
       gameMode: session.gameMode,
-      teams: session.teams
+      teams: session.teams,
+      gameType: (session as any).gameType
     });
   });
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { 
   Check, X, Trophy, RefreshCw, AlertCircle, 
-  Gamepad2, Sparkles, Zap, Award, Smile, Users
+  Gamepad2, Sparkles, Zap, Award, Smile, Users, ArrowRight
 } from "lucide-react";
 import { socket } from "../lib/socket";
 import { Player, Team } from "../types";
@@ -31,6 +31,27 @@ export default function StudentInterface() {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [isConnected, setIsConnected] = useState(socket.connected);
+
+  // Game Platform modular variables (2.0.0)
+  const [activeGameType, setActiveGameType] = useState<'quiz_live' | 'mexicanos' | 'jeopardy' | 'exam'>('quiz_live');
+  
+  // 100 Mexicanos states
+  const [mexicanosQuestionText, setMexicanosQuestionText] = useState("");
+  const [mexicanosAnswersCount, setMexicanosAnswersCount] = useState(0);
+  const [mexicanosBuzzerLocked, setMexicanosBuzzerLocked] = useState(false);
+  const [mexicanosBuzzedName, setMexicanosBuzzedName] = useState("");
+  const [mexicanosBuzzedTeam, setMexicanosBuzzedTeam] = useState("");
+  
+  // Jeopardy states
+  const [jeopardyCategories, setJeopardyCategories] = useState<string[]>([]);
+  const [jeopardyActiveQuestion, setJeopardyActiveQuestion] = useState<{ category: string; value: number; text: string } | null>(null);
+  
+  // Exam states
+  const [examQuestions, setExamQuestions] = useState<any[]>([]);
+  const [examCurrentQuestionIndex, setExamCurrentQuestionIndex] = useState(0);
+  const [examAnswers, setExamAnswers] = useState<Record<number, number>>({}); 
+  const [examTimeStart, setExamTimeStart] = useState<number>(0);
+  const [examCompleted, setExamCompleted] = useState(false);
 
   // Active question details for student view
   const [activeQuestion, setActiveQuestion] = useState<{
@@ -119,6 +140,7 @@ export default function StudentInterface() {
       reconnected?: boolean;
       gameMode?: 'individual' | 'teams';
       teams?: Team[];
+      gameType?: any;
     }) => {
       setJoined(true);
       setJoinedPin(data.pin);
@@ -126,6 +148,9 @@ export default function StudentInterface() {
       setPlayerInfo(data.player);
       setRoomGameMode(data.gameMode || "individual");
       setRoomTeams(data.teams || []);
+      if (data.gameType) {
+        setActiveGameType(data.gameType);
+      }
       
       if (data.status) {
         setCurrentStatus(data.status);
@@ -168,6 +193,57 @@ export default function StudentInterface() {
       }
     });
 
+    // 100 Mexicanos Listeners
+    socket.on("mexicanos:question", (data: { questionText: string; answersCount: number }) => {
+      setActiveGameType("mexicanos");
+      setMexicanosQuestionText(data.questionText);
+      setMexicanosAnswersCount(data.answersCount);
+      setMexicanosBuzzerLocked(false);
+      setMexicanosBuzzedName("");
+      setMexicanosBuzzedTeam("");
+    });
+
+    socket.on("mexicanos:buzzed-state", (data: { buzzedName: string; buzzedTeam: string }) => {
+      setMexicanosBuzzerLocked(true);
+      setMexicanosBuzzedName(data.buzzedName);
+      setMexicanosBuzzedTeam(data.buzzedTeam);
+    });
+
+    socket.on("mexicanos:clear-buzz", () => {
+      setMexicanosBuzzerLocked(false);
+      setMexicanosBuzzedName("");
+      setMexicanosBuzzedTeam("");
+    });
+
+    // Jeopardy Listeners
+    socket.on("jeopardy:start", (data: { categories: string[] }) => {
+      setActiveGameType("jeopardy");
+      setJeopardyCategories(data.categories);
+      setJeopardyActiveQuestion(null);
+    });
+
+    socket.on("jeopardy:question-show", (data: { category: string; value: number; questionText: string }) => {
+      setJeopardyActiveQuestion({ category: data.category, value: data.value, text: data.questionText });
+    });
+
+    socket.on("jeopardy:cell-cleared", () => {
+      setJeopardyActiveQuestion(null);
+    });
+
+    // Exam Mode Listeners
+    socket.on("exam:start", (data: { totalQuestions: number; questions: any[] }) => {
+      setActiveGameType("exam");
+      setExamQuestions(data.questions || []);
+      setExamCurrentQuestionIndex(0);
+      setExamAnswers({});
+      setExamTimeStart(Date.now());
+      setExamCompleted(false);
+    });
+
+    socket.on("exam:ended", () => {
+      setExamCompleted(true);
+    });
+
     socket.on("game:status-update", (data: any) => {
       if (data.status === "countdown") {
         setCurrentStatus("countdown");
@@ -193,6 +269,7 @@ export default function StudentInterface() {
 
     socket.on("question:active", (data: any) => {
       setCurrentStatus("question");
+      setActiveGameType("quiz_live");
       setAnsweredIndex(data.alreadyAnswered ? data.lastAnswerIndex ?? 0 : null);
       setQuestionResult(null);
       setActiveQuestion({
@@ -246,6 +323,14 @@ export default function StudentInterface() {
       socket.off("question:tick");
       socket.off("player:answer-received");
       socket.off("player:question-result");
+      socket.off("mexicanos:question");
+      socket.off("mexicanos:buzzed-state");
+      socket.off("mexicanos:clear-buzz");
+      socket.off("jeopardy:start");
+      socket.off("jeopardy:question-show");
+      socket.off("jeopardy:cell-cleared");
+      socket.off("exam:start");
+      socket.off("exam:ended");
     };
   }, [activeQuestion, playerInfo]);
 
@@ -795,6 +880,251 @@ export default function StudentInterface() {
         <span className="font-bold">Sincronizando con el docente...</span>
       </div>
     );
+  }
+
+  // Overrides gameView dynamically based on the active educational game v2.0.0
+  if (joined) {
+    if (activeGameType === "mexicanos") {
+      gameView = (
+        <div className="bg-slate-900 text-white p-6 rounded-3xl border border-slate-800 text-center space-y-6 shadow-xl animate-fade-in" id="student-mexicanos-panel">
+          <div className="space-y-1">
+            <span className="bg-amber-500 text-slate-950 font-black text-[10px] px-2.5 py-0.5 rounded uppercase font-mono">
+              🇲🇽 Buzzer Activo
+            </span>
+            <p className="text-xs text-slate-400 font-sans italic">Reactivo de Encuesta en Proyección</p>
+          </div>
+
+          <div className="bg-slate-950 border border-slate-850 p-4 rounded-2xl min-h-[100px] flex flex-col justify-center">
+            <p className="text-sm font-bold text-slate-300 leading-normal font-sans text-center">
+              {mexicanosQuestionText || "Esperando pregunta del profesor..."}
+            </p>
+            {mexicanosAnswersCount > 0 && (
+              <span className="text-[10px] uppercase font-mono font-black text-indigo-400 mt-2">
+                Tablero con {mexicanosAnswersCount} respuestas ocultas
+              </span>
+            )}
+          </div>
+
+          {mexicanosBuzzedName ? (
+            <div className="bg-amber-500/15 border border-amber-500/30 p-5 rounded-2xl animate-pulse space-y-1">
+              <span className="text-2xl block">⚡</span>
+              <p className="text-md font-black text-amber-200">{mexicanosBuzzedName}</p>
+              {mexicanosBuzzedTeam && <p className="text-[10px] font-bold text-slate-450 uppercase font-mono">{mexicanosBuzzedTeam}</p>}
+              <p className="text-[10px] text-amber-500 font-sans italic mt-1 font-bold">¡Toca responder ahora!</p>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                socket.emit("game:player-message", {
+                  pin: joinedPin,
+                  event: "mexicanos:player-buzz",
+                  name: playerInfo?.name || "Estudiante",
+                  teamId: playerInfo?.teamId || ""
+                });
+              }}
+              disabled={mexicanosBuzzerLocked}
+              className="w-full aspect-square max-w-[170px] mx-auto rounded-full bg-gradient-to-tr from-rose-600 to-red-500 active:from-rose-700 active:to-red-600 flex flex-col items-center justify-center border-4 border-slate-850 hover:scale-103 shadow-2xl active:scale-97 transition-all cursor-pointer select-none text-white disabled:opacity-20 disabled:cursor-not-allowed"
+            >
+              <span className="text-3xl">🛎️</span>
+              <span className="text-xs font-sans font-black uppercase mt-1 tracking-wider">TIMBRE</span>
+            </button>
+          )}
+        </div>
+      );
+    }
+    else if (activeGameType === "jeopardy") {
+      gameView = (
+        <div className="bg-slate-900 p-6 rounded-3xl border border-slate-800 text-center text-white space-y-6 shadow-xl animate-fade-in" id="student-jeopardy-panel">
+          <div className="space-y-1">
+            <span className="bg-indigo-650 text-white font-black text-[10px] px-2.5 py-0.5 rounded uppercase font-mono">
+              🧠 Tablero Jeopardy
+            </span>
+            <p className="text-xs text-slate-400 font-sans italic">Modo Cooperativo por Equipos</p>
+          </div>
+
+          {jeopardyActiveQuestion ? (
+            <div className="space-y-4">
+              <div className="bg-slate-950 border border-indigo-950 p-5 rounded-2xl">
+                <span className="text-amber-400 text-xs font-bold uppercase font-mono block mb-2">
+                  {jeopardyActiveQuestion.category} — {jeopardyActiveQuestion.value} pts
+                </span>
+                <p className="text-xs font-semibold text-slate-200 leading-normal font-sans">
+                  {jeopardyActiveQuestion.text}
+                </p>
+              </div>
+
+              <button
+                onClick={() => {
+                  socket.emit("game:player-message", {
+                    pin: joinedPin,
+                    event: "mexicanos:player-buzz",
+                    name: playerInfo?.name || "Estudiante",
+                    teamId: playerInfo?.teamId || ""
+                  });
+                }}
+                className="w-full py-3.5 bg-indigo-650 hover:bg-indigo-700 active:bg-indigo-800 text-white font-black text-xs rounded-xl shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Zap size={14} className="fill-white" />
+                <span>SOLICITAR RESPUESTA (BUZZ)</span>
+              </button>
+            </div>
+          ) : (
+            <div className="py-10 bg-slate-950/40 border border-dashed border-slate-800 rounded-2xl flex flex-col items-center justify-center text-slate-500 space-y-2">
+              <span className="text-3xl">🎴</span>
+              <p className="text-xs font-semibold">El profesor está seleccionando una casilla del tablero...</p>
+              <p className="text-[10px] opacity-65 max-w-xs font-medium">Mira el proyector de la pizarra en el salón para ver el tablero general de juego.</p>
+            </div>
+          )}
+        </div>
+      );
+    }
+    else if (activeGameType === "exam") {
+      const hasQuestions = examQuestions.length > 0;
+      const currentQ = hasQuestions ? examQuestions[examCurrentQuestionIndex] : null;
+      const solvedIndices = Object.keys(examAnswers);
+      const isCompleted = examCompleted || (hasQuestions && solvedIndices.length >= examQuestions.length);
+
+      if (isCompleted) {
+        let correctAttempts = 0;
+        let incorrectAttempts = 0;
+        examQuestions.forEach((q, index) => {
+          const optionChosen = examAnswers[index];
+          if (optionChosen === q.correctOption) {
+            correctAttempts++;
+          } else {
+            incorrectAttempts++;
+          }
+        });
+        const totalQs = examQuestions.length;
+        const scorePercentage = totalQs > 0 ? Math.round((correctAttempts / totalQs) * 100) : 0;
+        const durationSeconds = Math.round((Date.now() - examTimeStart) / 1000);
+
+        gameView = (
+          <div className="bg-white border border-slate-200 rounded-3xl p-6 text-center space-y-6 text-slate-800 shadow-xl animate-fade-in" id="student-exam-complete-card">
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-sm">
+              <Check size={28} className="stroke-[2.5]" />
+            </div>
+            
+            <div className="space-y-1 font-sans">
+              <h3 className="text-xl font-extrabold text-slate-800 leading-none">Examen Entregado</h3>
+              <p className="text-[11px] text-slate-450 mt-1 font-medium font-sans">Evaluación entregada con éxito al docente.</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-center pt-2">
+              <div className="bg-slate-50 border p-3 rounded-xl border-slate-150">
+                <span className="text-[9px] font-black uppercase text-slate-400 block font-mono">Calificación</span>
+                <span className="text-lg font-black font-mono text-indigo-700">{scorePercentage}%</span>
+              </div>
+              <div className="bg-slate-50 border p-3 rounded-xl border-slate-150">
+                <span className="text-[9px] font-black uppercase text-slate-400 block font-mono">Tiempo</span>
+                <span className="text-lg font-black font-mono text-slate-700">{durationSeconds}s</span>
+              </div>
+              <div className="bg-slate-50 border p-3 rounded-xl border-slate-150">
+                <span className="text-[9px] font-black uppercase text-slate-400 block font-mono">Aciertos</span>
+                <span className="text-lg font-black font-mono text-emerald-650">{correctAttempts}</span>
+              </div>
+              <div className="bg-slate-50 border p-3 rounded-xl border-slate-150">
+                <span className="text-[9px] font-black uppercase text-slate-400 block font-mono">Errores</span>
+                <span className="text-lg font-black font-mono text-rose-500">{incorrectAttempts}</span>
+              </div>
+            </div>
+
+            <p className="text-[10px] text-slate-400 leading-normal font-sans italic">
+              Puedes conservar tu pantalla aquí. Tu profesor descargará la planilla general de notas.
+            </p>
+          </div>
+        );
+      } else if (currentQ) {
+        const isSelected = examAnswers[examCurrentQuestionIndex] !== undefined;
+        const selectedIndex = examAnswers[examCurrentQuestionIndex];
+
+        const handleChooseOption = (optIdx: number) => {
+          if (isSelected) return;
+          const newAnswers = { ...examAnswers, [examCurrentQuestionIndex]: optIdx };
+          setExamAnswers(newAnswers);
+
+          let correctAttempts = 0;
+          let incorrectAttempts = 0;
+          examQuestions.forEach((q, index) => {
+            const optionChosen = newAnswers[index];
+            if (optionChosen === undefined) return;
+            if (optionChosen === q.correctOption) {
+              correctAttempts++;
+            } else {
+              incorrectAttempts++;
+            }
+          });
+
+          socket.emit("game:player-message", {
+            pin: joinedPin,
+            event: "exam:player-progress",
+            solvedCount: Object.keys(newAnswers).length,
+            correctCount: correctAttempts,
+            incorrectCount: incorrectAttempts,
+            completed: Object.keys(newAnswers).length >= examQuestions.length,
+            timeTakenSeconds: Math.round((Date.now() - examTimeStart) / 1000)
+          });
+        };
+
+        gameView = (
+          <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 space-y-5 shadow-xl animate-fade-in" id="student-exam-active-card">
+            <div className="flex justify-between items-center text-xs text-slate-400 border-b border-rose-50 pb-3">
+              <span className="font-extrabold uppercase text-[10px] tracking-wide text-rose-600 bg-rose-50 border border-rose-100 px-2 rounded">Examen Individual</span>
+              <span className="font-mono font-bold">Reactivo {examCurrentQuestionIndex + 1} de {examQuestions.length}</span>
+            </div>
+
+            <p className="text-sm font-black text-slate-900 leading-normal font-sans text-left">
+              {currentQ.text}
+            </p>
+
+            <div className="space-y-2.5 pt-1">
+              {currentQ.options.map((opt: string, idx: number) => {
+                if (!opt || !opt.trim()) return null;
+                const blockSelection = isSelected;
+                const wasChosen = selectedIndex === idx;
+                
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => handleChooseOption(idx)}
+                    disabled={blockSelection}
+                    className={`w-full p-4 rounded-xl text-left text-xs font-bold leading-normal border shadow-sm transition-all flex items-center justify-between cursor-pointer ${
+                      wasChosen 
+                        ? "bg-indigo-650 border-indigo-700 text-white font-extrabold" 
+                        : blockSelection 
+                          ? "bg-slate-50 border-slate-100 text-slate-350 opacity-40 select-none cursor-not-allowed" 
+                          : "bg-white border-slate-150 hover:bg-slate-50 text-slate-850"
+                    }`}
+                  >
+                    <span>{opt}</span>
+                    {wasChosen && <span className="text-[10px] bg-indigo-750 text-white px-2 py-0.5 rounded font-bold uppercase shrink-0 font-mono text-center">Marcada</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex justify-between items-center pt-3 border-t border-slate-100">
+              <button
+                onClick={() => setExamCurrentQuestionIndex(prev => Math.max(0, prev - 1))}
+                disabled={examCurrentQuestionIndex === 0}
+                className="px-4 py-2 text-xs font-bold bg-slate-50 border border-slate-200 rounded-xl hover:bg-slate-100 cursor-pointer disabled:opacity-20"
+              >
+                Anterior
+              </button>
+
+              <button
+                onClick={() => setExamCurrentQuestionIndex(prev => Math.min(examQuestions.length - 1, prev + 1))}
+                disabled={examCurrentQuestionIndex === examQuestions.length - 1 || !isSelected}
+                className="px-4.5 py-2 text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl cursor-pointer disabled:opacity-30 flex items-center gap-1.5 animate-pulse"
+              >
+                <span>Siguiente</span>
+                <ArrowRight size={13} />
+              </button>
+            </div>
+          </div>
+        );
+      }
+    }
   }
 
   // Unified persistent frame for connected active student layout
