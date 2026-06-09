@@ -25,7 +25,21 @@ import Database from "better-sqlite3";
 
 const PORT = 3000;
 const DB_FILE = path.join(process.cwd(), "db.json");
-const SQLITE_FILE = path.join(process.cwd(), "prepmaster.db");
+
+const isElectronEnv = process.env.IS_ELECTRON === "true" || !!process.env.PREPMASTER_DB_PATH;
+let SQLITE_FILE = path.join(process.cwd(), "prepmaster.db");
+
+if (process.env.PREPMASTER_DB_PATH) {
+  SQLITE_FILE = process.env.PREPMASTER_DB_PATH;
+} else if (isElectronEnv) {
+  const appDataPath = process.env.APPDATA || 
+    (process.platform === 'darwin' ? path.join(process.env.HOME || '', 'Library/Application Support') : path.join(process.env.HOME || '', '.config'));
+  const userDir = path.join(appDataPath, "PrepmasterLive");
+  if (!fs.existsSync(userDir)) {
+    fs.mkdirSync(userDir, { recursive: true });
+  }
+  SQLITE_FILE = path.join(userDir, "prepmaster.db");
+}
 
 // Initialize SQLite Database
 const db = new Database(SQLITE_FILE);
@@ -437,6 +451,69 @@ function getOptionDistribution(session: GameSession): PlayerAnswersCount {
 }
 
 // REST APIs
+app.get("/api/electron/status", (req, res) => {
+  res.json({
+    isElectron: isElectronEnv,
+    dbPath: SQLITE_FILE,
+    backupsDir: path.join(path.dirname(SQLITE_FILE), "respaldos")
+  });
+});
+
+app.post("/api/electron/open-folder", (req, res) => {
+  try {
+    const dir = path.dirname(SQLITE_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const platform = process.platform;
+    const { exec } = require("child_process");
+    if (platform === "win32") {
+      exec(`explorer "${dir}"`);
+    } else if (platform === "darwin") {
+      exec(`open "${dir}"`);
+    } else {
+      exec(`xdg-open "${dir}"`);
+    }
+    res.json({ success: true, dir });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.post("/api/electron/backup", (req, res) => {
+  try {
+    const parentDir = path.dirname(SQLITE_FILE);
+    const backupsDir = path.join(parentDir, "respaldos");
+    if (!fs.existsSync(backupsDir)) {
+      fs.mkdirSync(backupsDir, { recursive: true });
+    }
+
+    const now = new Date();
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const backupName = `prepmaster_respaldo_${timestamp}.db`;
+    const backupPath = path.join(backupsDir, backupName);
+
+    // Copy DB file
+    fs.copyFileSync(SQLITE_FILE, backupPath);
+
+    // Open backup folder in UI
+    const platform = process.platform;
+    const { exec } = require("child_process");
+    if (platform === "win32") {
+      exec(`explorer "${backupsDir}"`);
+    } else if (platform === "darwin") {
+      exec(`open "${backupsDir}"`);
+    } else {
+      exec(`xdg-open "${backupsDir}"`);
+    }
+
+    res.json({ success: true, backupPath, backupName });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get("/api/ip", async (req, res) => {
   const ips = getLocalIPs();
   const preferredIP = ips[0];

@@ -1,13 +1,16 @@
 {
-  "name": "react-example",
+  "name": "prepmaster-live",
   "private": true,
-  "version": "2.1.4",
+  "version": "2.2.0",
   "type": "module",
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "dev:electron": "esbuild electron/main.ts --bundle --platform=node --format=cjs --outfile=dist-electron/main.js && electron dist-electron/main.js",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild electron/main.ts --bundle --platform=node --format=cjs --outfile=dist-electron/main.js",
     "start": "node dist/server.cjs",
-    "clean": "rm -rf dist server.js",
+    "clean": "rm -rf dist server.js dist-electron dist-desktop",
+    "dist": "npm run build && electron-builder",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -36,10 +39,37 @@
     "@types/papaparse": "^5.5.2",
     "@types/qrcode": "^1.5.6",
     "autoprefixer": "^10.4.21",
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.2",
     "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
+  },
+  "build": {
+    "appId": "com.prepmaster.live",
+    "productName": "Prepmaster Live",
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Prepmaster Live"
+    }
   }
 }

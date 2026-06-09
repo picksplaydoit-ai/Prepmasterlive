@@ -146,6 +146,16 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
   const [loadingResults, setLoadingResults] = useState(false);
   const [resultsError, setResultsError] = useState<string | null>(null);
 
+  // States for desktop / Electron SQLite configurations
+  const [electronStatus, setElectronStatus] = useState<{
+    isElectron: boolean;
+    dbPath: string;
+    backupsDir: string;
+  } | null>(null);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [backupSuccessMsg, setBackupSuccessMsg] = useState("");
+  const [openFolderLoading, setOpenFolderLoading] = useState(false);
+
   // Fetch detailed results when a game completes
   useEffect(() => {
     if (gameStatus === "ended" && activePin) {
@@ -237,6 +247,15 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
       }
     } catch (err) {
       console.error("Error al obtener /api/network-info:", err);
+    }
+    try {
+      const res = await fetch("/api/electron/status");
+      if (res.ok) {
+        const data = await res.json();
+        setElectronStatus(data);
+      }
+    } catch (err) {
+      console.error("Error al obtener status de Electron:", err);
     }
   };
 
@@ -2000,6 +2019,91 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
         {/* Network and connectivity diagnostics section */}
         <NetworkDiagnostic />
+
+        {/* Panel de Gestión de Datos - Desktop SQLite */}
+        <div className="bg-white border border-slate-200 rounded-3xl p-6 sm:p-8 space-y-5 shadow-sm text-left" id="desktop-local-data-management">
+          <div className="border-b border-slate-150 pb-3 flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-black text-slate-800 font-sans flex items-center gap-2">
+                📂 Gestión de Datos Local (Sistema SQLite)
+              </h3>
+              <p className="text-[11px] text-slate-400 font-sans tracking-wide">
+                Configuraciones y mantenimiento de bases de datos persistentes locales para Prepmaster Live.
+              </p>
+            </div>
+            {electronStatus?.isElectron ? (
+              <span className="bg-emerald-50 text-emerald-700 border border-emerald-150 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full">
+                Modo Escritorio
+              </span>
+            ) : (
+              <span className="bg-slate-50 text-slate-500 border border-slate-150 text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded-full">
+                Modo Servidor Web
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-4">
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2">
+              <span className="text-[10px] text-slate-400 font-mono uppercase font-bold block">Ubicación de la Base de Datos</span>
+              <p className="text-xs font-semibold text-slate-700 font-mono select-all break-all bg-white border border-slate-150/60 p-2.5 rounded-xl">
+                {electronStatus?.dbPath || "prepmaster.db (Directorio raíz del proyecto)"}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={async () => {
+                  setOpenFolderLoading(true);
+                  try {
+                    const res = await fetch("/api/electron/open-folder", { method: "POST" });
+                    if (!res.ok) {
+                      alert("No se pudo abrir la carpeta. Asegúrate de estar ejecutando la aplicación en modo de escritorio.");
+                    }
+                  } catch (err) {
+                    alert("Ocurrió un error al intentar abrir la carpeta de datos.");
+                  } finally {
+                    setOpenFolderLoading(false);
+                  }
+                }}
+                disabled={openFolderLoading}
+                className="flex items-center justify-center gap-2 bg-slate-50 border border-slate-200 text-slate-750 hover:bg-slate-100 font-sans font-bold px-5 py-3 rounded-xl shadow-xs transition-all text-xs cursor-pointer disabled:opacity-50"
+              >
+                📁 {openFolderLoading ? "Abriendo..." : "Abrir carpeta de datos"}
+              </button>
+
+              <button
+                onClick={async () => {
+                  setBackupLoading(true);
+                  setBackupSuccessMsg("");
+                  try {
+                    const res = await fetch("/api/electron/backup", { method: "POST" });
+                    if (res.ok) {
+                      const data = await res.json();
+                      setBackupSuccessMsg(`¡Respaldo creado con éxito! Guardado como: ${data.backupName}`);
+                      setTimeout(() => setBackupSuccessMsg(""), 6000);
+                    } else {
+                      alert("No se pudo crear el respaldo. Asegúrate de estar ejecutando la versión de escritorio.");
+                    }
+                  } catch (err) {
+                    alert("Ocurrió un error al intentar respaldar la base de datos.");
+                  } finally {
+                    setBackupLoading(false);
+                  }
+                }}
+                disabled={backupLoading}
+                className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-sans font-black px-5 py-3 rounded-xl shadow-sm transition-all text-xs cursor-pointer disabled:opacity-50"
+              >
+                💾 {backupLoading ? "Realizando respaldo..." : "Crear respaldo de base de datos"}
+              </button>
+            </div>
+
+            {backupSuccessMsg && (
+              <div className="p-3 bg-emerald-50 border border-emerald-150 text-emerald-800 text-xs font-semibold rounded-xl animate-fade-in flex items-center gap-2">
+                <span>✓</span> {backupSuccessMsg}
+              </div>
+            )}
+          </div>
+        </div>
 
         {/* Persistent server IP footer */}
         {connInfo && (
