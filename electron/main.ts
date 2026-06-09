@@ -3,6 +3,7 @@ import * as path from "path";
 import { fork, ChildProcess } from "child_process";
 import { fileURLToPath } from "url";
 import * as http from "http";
+import * as fs from "fs";
 
 // Get standard dir names since we are using esbuild to compile
 const _dirname = typeof __dirname !== "undefined" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
@@ -27,16 +28,24 @@ function startBackend() {
     PORT: "3000"
   };
 
-  if (isDev) {
-    // In dev, the dev server is run concurrently or spawned.
-    // Let's spawn tsx server.ts
+  // Prefer loading the compiled CJS server bundle if it exists (very fast & stable, no runtime TS compilation/Vite overhead)
+  const compiledServerPath = path.join(_dirname, "../dist/server.cjs");
+  if (fs.existsSync(compiledServerPath)) {
+    console.log("Iniciando backend compilado CJS:", compiledServerPath);
+    serverProcess = fork(compiledServerPath, [], { env });
+  } else if (isDev) {
+    // Fallback to tsx on the raw server.ts if not compiled yet
+    console.log("Servidor compilado no encontrado, iniciando con tsx...");
     const serverPath = path.join(_dirname, "../server.ts");
     const tsxBin = path.join(_dirname, "../node_modules/tsx/dist/cli.mjs");
     serverProcess = fork(tsxBin, [serverPath], { env });
   } else {
-    // In production, load the compiled dist/server.cjs
-    const serverPath = path.join(_dirname, "../dist/server.cjs");
-    serverProcess = fork(serverPath, [], { env });
+    dialog.showErrorBox(
+      "Error de Servidor",
+      "No se encontró el archivo de servidor compilado en dist/server.cjs"
+    );
+    app.quit();
+    return;
   }
 
   serverProcess.on("exit", (code) => {

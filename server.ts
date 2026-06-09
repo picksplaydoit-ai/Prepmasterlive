@@ -2629,7 +2629,8 @@ io.on("connection", (socket: Socket) => {
 
 // Configure Vite or Serve SPA Dist files
 async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
+  const isDevVite = process.env.NODE_ENV !== "production" && process.env.IS_ELECTRON !== "true";
+  if (isDevVite) {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
