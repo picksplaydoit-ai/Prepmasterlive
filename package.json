@@ -1,13 +1,13 @@
 {
   "name": "prepmaster-live",
   "private": true,
-  "version": "2.2.0",
+  "version": "2.2.1",
   "type": "module",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "tsx server.ts",
-    "dev:electron": "esbuild electron/main.ts --bundle --platform=node --format=cjs --outfile=dist-electron/main.js && electron dist-electron/main.js",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild electron/main.ts --bundle --platform=node --format=cjs --outfile=dist-electron/main.js",
+    "dev:electron": "esbuild electron/main.ts --bundle --platform=node --format=cjs --outfile=dist-electron/main.cjs && electron dist-electron/main.cjs",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs && esbuild electron/main.ts --bundle --platform=node --format=cjs --outfile=dist-electron/main.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js dist-electron dist-desktop",
     "dist": "npm run build && electron-builder",
