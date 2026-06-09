@@ -1,7 +1,8 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, dialog } from "electron";
 import * as path from "path";
 import { fork, ChildProcess } from "child_process";
 import { fileURLToPath } from "url";
+import * as http from "http";
 
 // Get standard dir names since we are using esbuild to compile
 const _dirname = typeof __dirname !== "undefined" ? __dirname : path.dirname(fileURLToPath(import.meta.url));
@@ -43,6 +44,35 @@ function startBackend() {
   });
 }
 
+function waitForServer(url: string, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const startTime = Date.now();
+    const interval = 250; // Check every 250ms
+
+    function check() {
+      const req = http.get(url, (res) => {
+        // Any response (even 451, 404, etc.) means the server is online and responding!
+        resolve();
+      });
+
+      req.on("error", (err) => {
+        if (Date.now() - startTime > timeoutMs) {
+          reject(new Error(`Tiempo de espera agotado para el servidor local en ${url}: ${err.message}`));
+        } else {
+          setTimeout(check, interval);
+        }
+      });
+
+      // Avoid TCP socket hanging infinitely
+      req.setTimeout(1000, () => {
+        req.destroy();
+      });
+    }
+
+    check();
+  });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1240,
@@ -59,16 +89,13 @@ function createWindow() {
     mainWindow.setMenuBarVisibility(false);
   }
 
-  // Poll server or simply wait 2 seconds before loading
   const loadUrl = "http://localhost:3000";
-  setTimeout(() => {
-    mainWindow?.loadURL(loadUrl).catch((err) => {
-      console.log("Fallo al cargar URL, reintentando...", err);
-      setTimeout(() => {
-        mainWindow?.loadURL(loadUrl);
-      }, 2000);
-    });
-  }, isDev ? 3500 : 2000);
+  mainWindow.loadURL(loadUrl).catch((err) => {
+    console.log("Fallo al cargar URL, reintentando...", err);
+    setTimeout(() => {
+      mainWindow?.loadURL(loadUrl);
+    }, 1000);
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -77,7 +104,27 @@ function createWindow() {
 
 app.whenReady().then(() => {
   startBackend();
-  createWindow();
+
+  const serverUrl = "http://localhost:3000";
+  const timeoutLimit = 15000; // 15 seconds limit
+
+  waitForServer(serverUrl, timeoutLimit)
+    .then(() => {
+      createWindow();
+    })
+    .catch((err) => {
+      console.error(err);
+      dialog.showErrorBox(
+        "Error de Inicio - Prepmaster Live",
+        "No se pudo establecer conexión con el servidor interno de la aplicación.\n\nDetalle:\n" +
+        err.message + 
+        "\n\nPor favor, intenta reiniciar la aplicación o verifica que el puerto 3000 no se encuentre en uso por otro programa."
+      );
+      if (serverProcess) {
+        serverProcess.kill();
+      }
+      app.quit();
+    });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
