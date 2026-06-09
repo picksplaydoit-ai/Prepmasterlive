@@ -73,12 +73,19 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
   }, []);
 
   useEffect(() => {
+    const host = window.location.hostname;
+    const isPrivateIp = host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.") || host.startsWith("169.254.");
+    const isLocalhost = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
+    const isCloudEnv = !isLocalhost && !isPrivateIp;
+
     let url = "";
-    if (networkInfo && networkInfo.localIp) {
+    if (isCloudEnv) {
+      url = `${window.location.origin}/join?pin=${pin}&game=exam_mode`;
+      setIsIpDetected(true);
+    } else if (networkInfo && networkInfo.localIp) {
       url = `http://${networkInfo.localIp}:${networkInfo.port}/join?pin=${pin}&game=exam_mode`;
       setIsIpDetected(true);
     } else {
-      const host = window.location.hostname;
       if (host && host !== "localhost" && host !== "127.0.0.1") {
         url = `${window.location.origin}/join?pin=${pin}&game=exam_mode`;
         setIsIpDetected(true);
