@@ -45,7 +45,8 @@ export function playGameSound(sound: string) {
     
     switch (sound) {
       // Quiz Live Sounds
-      case "inicio": {
+      case "inicio":
+      case "inicio_pregunta": {
         // Triumphant opening major chord
         playTone(ctx, 261.63, "triangle", 0, 0.4, 0.15); // C4
         playTone(ctx, 329.63, "triangle", 0.1, 0.4, 0.15); // E4
@@ -55,7 +56,7 @@ export function playGameSound(sound: string) {
       }
       
       case "cuenta_regresiva": {
-        // High crisp retro blip
+        // High crisp retro blip for countdown
         playTone(ctx, 880.00, "sine", 0, 0.12, 0.05);
         break;
       }
@@ -83,6 +84,22 @@ export function playGameSound(sound: string) {
         break;
       }
       
+      case "final_pregunta": {
+        // End of question chime
+        playTone(ctx, 440.00, "triangle", 0, 0.3, 0.1); // A4
+        playTone(ctx, 349.23, "triangle", 0.15, 0.3, 0.1); // F4
+        break;
+      }
+
+      case "cambio_ranking": {
+        // Fun ranking change up swoosh arpeggio
+        playTone(ctx, 523.25, "sine", 0, 0.1, 0.05);
+        playTone(ctx, 587.33, "sine", 0.06, 0.1, 0.05);
+        playTone(ctx, 659.25, "sine", 0.12, 0.1, 0.05);
+        playTone(ctx, 783.99, "sine", 0.18, 0.25, 0.1);
+        break;
+      }
+
       case "podio": {
         // Victory fan-fare
         const notes = [293.66, 349.23, 440.00, 587.33]; // D, F, A, D
@@ -92,8 +109,9 @@ export function playGameSound(sound: string) {
         break;
       }
       
-      // 100 Mexicanos Dijeron Sounds
-      case "descubrir_respuesta": {
+      // 100 Estudiantes / Mexicanos Dijeron Sounds
+      case "descubrir_respuesta":
+      case "revelar_respuesta": {
         // Sparkly pleasant retro ding
         playTone(ctx, 587.33, "triangle", 0, 0.15, 0.08); // D5
         playTone(ctx, 880.00, "sine", 0.06, 0.2, 0.1);    // A5
@@ -102,7 +120,7 @@ export function playGameSound(sound: string) {
       }
       
       case "error": {
-        // Big dramatic 100 Mexicanos Strike Buzzer (Triple buzz)
+        // Big dramatic Strike Buzzer (Triple buzz)
         const playStrike = (delay: number) => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
@@ -190,7 +208,30 @@ export function playGameSound(sound: string) {
         break;
       }
       
-      // Exam Mode
+      // Exam Mode (Subtle)
+      case "inicio_examen": {
+        // A calm rising harp-like arpeggio (academic vibe)
+        playTone(ctx, 261.63, "sine", 0, 0.3, 0.15); // C4
+        playTone(ctx, 329.63, "sine", 0.1, 0.3, 0.15); // E4
+        playTone(ctx, 392.00, "sine", 0.2, 0.3, 0.15); // G4
+        playTone(ctx, 440.00, "sine", 0.3, 0.4, 0.2); // A4
+        break;
+      }
+
+      case "tiempo_agotado": {
+        // Low double-pulse alarm
+        playTone(ctx, 180, "sawtooth", 0, 0.2, 0.1);
+        playTone(ctx, 180, "sawtooth", 0.25, 0.3, 0.1);
+        break;
+      }
+
+      case "reconexion_exitosa": {
+        // Fast cheerful double chime
+        playTone(ctx, 587.33, "sine", 0, 0.15, 0.05);
+        playTone(ctx, 880.00, "sine", 0.06, 0.2, 0.05);
+        break;
+      }
+
       case "finalizacio_examen":
       case "finalizacion": {
         // Calm resolution bell
@@ -198,6 +239,85 @@ export function playGameSound(sound: string) {
         playTone(ctx, 659.25, "sine", 0.12, 0.5, 0.25); // E5
         playTone(ctx, 783.99, "sine", 0.24, 0.5, 0.25); // G5
         playTone(ctx, 1046.50, "sine", 0.36, 0.8, 0.4); // C6
+        break;
+      }
+
+      // Conecta 4 Educativo Sounds
+      case "conecta4_ficha": {
+        // Descending bubble drop + thud
+        const duration = 0.45;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(600, now);
+        osc.frequency.exponentialRampToValueAtTime(150, now + 0.35);
+        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + duration);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + duration);
+
+        // Thud knock sound
+        playTone(ctx, 90, "triangle", 0.32, 0.15, 0.05);
+        break;
+      }
+
+      case "conecta4_ganar_turno": {
+        // Fast cheerful ascending chime
+        playTone(ctx, 392.00, "sine", 0, 0.12, 0.05); // G4
+        playTone(ctx, 523.25, "sine", 0.06, 0.12, 0.05); // C5
+        playTone(ctx, 659.25, "sine", 0.12, 0.12, 0.05); // E5
+        playTone(ctx, 783.99, "sine", 0.18, 0.25, 0.1); // G5
+        break;
+      }
+
+      case "conecta4_linea": {
+        // Sparkling win shimmer
+        for (let i = 0; i < 6; i++) {
+          playTone(ctx, 800 + i * 150, "sine", i * 0.05, 0.2, 0.08);
+        }
+        break;
+      }
+
+      case "conecta4_victoria": {
+        // Grand victory fanfare
+        const notes = [261.63, 329.63, 392.00, 523.25, 659.25, 783.99, 1046.50];
+        notes.forEach((freq, i) => {
+          playTone(ctx, freq, "sine", i * 0.08, 0.4, 0.15);
+        });
+        playTone(ctx, 1318.51, "sine", 0.56, 0.8, 0.3); // E6 sparkle
+        break;
+      }
+
+      // Universal Buzzer Sounds (Prepmaster 2.6.0)
+      case "buzzer_start": {
+        playTone(ctx, 440.00, "triangle", 0, 0.15, 0.05); // A4
+        playTone(ctx, 554.37, "triangle", 0.08, 0.15, 0.05); // C#5
+        playTone(ctx, 659.25, "triangle", 0.16, 0.3, 0.1); // E5
+        break;
+      }
+
+      case "buzzer_victory": {
+        playTone(ctx, 523.25, "sine", 0, 0.12, 0.05); // C5
+        playTone(ctx, 659.25, "sine", 0.06, 0.12, 0.05); // E5
+        playTone(ctx, 783.99, "sine", 0.12, 0.12, 0.05); // G5
+        playTone(ctx, 1046.50, "sine", 0.18, 0.4, 0.15); // C6
+        break;
+      }
+
+      case "buzzer_close": {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sawtooth";
+        osc.frequency.setValueAtTime(180, now);
+        osc.frequency.setValueAtTime(120, now + 0.08);
+        gain.gain.setValueAtTime(0.15, now);
+        gain.gain.linearRampToValueAtTime(0.01, now + 0.18);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.18);
         break;
       }
       

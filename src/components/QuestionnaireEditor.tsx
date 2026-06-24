@@ -234,7 +234,7 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
     const copy = [...questions];
     const list = parseMexicanosAnswers(copy[qIdx].options || []);
     if (list.length <= 3) {
-      setError("100 Mexicanos requiere al menos 3 respuestas.");
+      setError("100 Estudiantes requiere al menos 3 respuestas.");
       return;
     }
     list.splice(ansIdx, 1);
@@ -309,16 +309,16 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
         if (!q.text.trim()) {
-          setError(`La encuesta de 100 Mexicanos #${i + 1} no tiene pregunta.`);
+          setError(`La encuesta de 100 Estudiantes #${i + 1} no tiene pregunta.`);
           return;
         }
         const list = parseMexicanosAnswers(q.options || []);
         if (list.length < 3) {
-          setError(`La encuesta de 100 Mexicanos #${i + 1} debe contener como mínimo 3 respuestas válidas.`);
+          setError(`La encuesta de 100 Estudiantes #${i + 1} debe contener como mínimo 3 respuestas válidas.`);
           return;
         }
         if (list.length > 10) {
-          setError(`La encuesta de 100 Mexicanos #${i + 1} debe contener como máximo 10 respuestas.`);
+          setError(`La encuesta de 100 Estudiantes #${i + 1} debe contener como máximo 10 respuestas.`);
           return;
         }
         for (let ansIdx = 0; ansIdx < list.length; ansIdx++) {
@@ -442,7 +442,7 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
         >
           <option value="quiz_live">Quiz Live 🎯</option>
           <option value="exam_mode">Modo Examen 📝</option>
-          <option value="mexicanos">100 Mexicanos Dijeron 🇲🇽</option>
+          <option value="mexicanos">100 Estudiantes Dijeron 🧑‍🎓</option>
           <option value="jeopardy">Jeopardy 🏆</option>
         </select>
       </div>
@@ -771,7 +771,7 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
                 </div>
               )}
 
-              {/* === 100 MEXICANOS DIJERON === */}
+              {/* === 100 ESTUDIANTES DIJERON === */}
               {gameType === 'mexicanos' && (
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

@@ -39,11 +39,17 @@ interface StudentExamProgress {
   answers?: Record<number, number>;
   status?: string;
   autoSubmitted?: boolean;
+  tabChangeCount?: number;
+  disconnectCount?: number;
+  reconnectCount?: number;
+  lastEventName?: string;
+  lastEventTime?: string;
 }
 
 export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, connInfo }: ExamModeProps) {
   // Map of student socket id to their detailed exam progress
   const [examProgress, setExamProgress] = useState<Record<string, StudentExamProgress>>({});
+  const [examEventsList, setExamEventsList] = useState<any[]>([]);
   const [soundActive, setSoundActive] = useState(getSoundsEnabled());
   const [timerElapsed, setTimerElapsed] = useState(0);
   const [examDurationLimit, setExamDurationLimit] = useState<number | null>(null);
@@ -135,6 +141,9 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
           if (data.timeLimitMinutes) {
             setExamDurationLimit(data.timeLimitMinutes);
           }
+          if (data.examEvents) {
+            setExamEventsList(data.examEvents);
+          }
           if (data.examProgress) {
             setExamProgress(prev => {
               const nextProgress = { ...prev };
@@ -153,7 +162,12 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
                   timeTakenSeconds: item.timeTakenSeconds || 0,
                   answers: item.answers,
                   status: item.status || "Pendiente",
-                  autoSubmitted: item.autoSubmitted || false
+                  autoSubmitted: item.autoSubmitted || false,
+                  tabChangeCount: item.tabChangeCount || 0,
+                  disconnectCount: item.disconnectCount || 0,
+                  reconnectCount: item.reconnectCount || 0,
+                  lastEventName: item.lastEventName || "",
+                  lastEventTime: item.lastEventTime || ""
                 };
               });
               // Ensure any live players in lobby are also represented
@@ -271,8 +285,42 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
     };
 
     socket.on("exam:player-progress", handleProgressUpdate);
+
+    const handleEventRegistered = (data: {
+      playerId: string;
+      progress: any;
+      newEvent: any;
+    }) => {
+      setExamProgress(prev => {
+        const idToUse = data.playerId;
+        const existingRec = prev[idToUse];
+        return {
+          ...prev,
+          [idToUse]: {
+            ...existingRec,
+            ...data.progress,
+            playerId: idToUse
+          }
+        };
+      });
+      if (data.newEvent) {
+        setExamEventsList(prev => {
+          const duplicate = prev.some(
+            ev => ev.playerId === data.newEvent.playerId && 
+                  ev.evento === data.newEvent.evento && 
+                  ev.fechaHora === data.newEvent.fechaHora
+          );
+          if (duplicate) return prev;
+          return [...prev, data.newEvent];
+        });
+      }
+    };
+
+    socket.on("exam:event-registered", handleEventRegistered);
+
     return () => {
       socket.off("exam:player-progress", handleProgressUpdate);
+      socket.off("exam:event-registered", handleEventRegistered);
     };
   }, [quiz]);
 
@@ -354,6 +402,20 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Modo Examen");
+
+    // Add events sheet
+    const eventsRows = examEventsList.map((ev, idx) => ({
+      "No.": idx + 1,
+      "Alumno": ev.alumno || ev.name,
+      "PlayerId": ev.playerId,
+      "Evento": ev.evento,
+      "Descripción": ev.descripcion || ev.description,
+      "Fecha y hora": ev.fechaHora || ev.timestamp,
+      "Reactivo actual": ev.reactivoActual || ev.currentQuestion || "N/A",
+      "Estado del examen": ev.examStatus || ev.status || "En progreso"
+    }));
+    const wsEvents = XLSX.utils.json_to_sheet(eventsRows);
+    XLSX.utils.book_append_sheet(wb, wsEvents, "Eventos de examen");
 
     // Trigger local offline download
     const fileName = `Reporte_Examen_PIN_${pin}_${quiz.title.replace(/\s+/g, "_")}.xlsx`;
@@ -731,6 +793,89 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
           <p className="text-[10px] font-black uppercase text-amber-600 font-mono">Pendientes (⏱️)</p>
           <p className="text-xl font-bold font-mono text-amber-650">{totalPendientes}</p>
         </div>
+      </div>
+
+      {/* Alertas de integridad del examen */}
+      <div className="space-y-3 bg-slate-50 border border-slate-200 p-5 sm:p-6 rounded-2xl">
+        <h3 className="text-sm font-black tracking-wider text-rose-700 uppercase font-sans text-left flex items-center gap-2">
+          <span>⚠️ Alertas de Integridad del Examen</span>
+        </h3>
+        <p className="text-xs text-slate-500 font-semibold text-left font-sans leading-normal">
+          Se registran cambios de pestaña, pérdida de foco y desconexiones del alumno durante la aplicación.
+        </p>
+
+        {Object.keys(examProgress).length === 0 ? (
+          <div className="border border-dashed border-slate-200 py-6 text-center text-slate-400 text-xs font-semibold rounded-xl bg-white">
+            <p>Monitoreo inactivo. No hay alumnos rindiendo examen.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3" id="exam-integrity-alerts">
+            {(Object.values(examProgress) as StudentExamProgress[]).map(p => {
+              const tabChanges = p.tabChangeCount || 0;
+              const disconnects = p.disconnectCount || 0;
+              const totalEvents = tabChanges + disconnects;
+              
+              let badgeColor = "bg-emerald-55 text-emerald-800 border-emerald-200";
+              let badgeText = "Verde: Seguro";
+              if (totalEvents === 1) {
+                badgeColor = "bg-amber-55 text-amber-800 border-amber-200";
+                badgeText = "Amarillo: 1 Advertencia";
+              } else if (totalEvents >= 2) {
+                badgeColor = "bg-rose-55 text-rose-850 border-rose-200";
+                badgeText = `Rojo: ${totalEvents} Alertas`;
+              }
+              
+              return (
+                <div 
+                  key={p.playerId || p.socketId}
+                  className="p-4 rounded-xl border flex flex-col justify-between gap-3 bg-white border-slate-200 shadow-3xs text-left"
+                >
+                  <div className="flex justify-between items-start gap-2 border-b border-slate-100 pb-2">
+                    <div className="space-y-0.5">
+                      <span className="font-extrabold text-xs text-slate-900">{p.name}</span>
+                      <p className="text-[10px] text-slate-400 font-mono">ID: {p.playerId || "N/A"}</p>
+                    </div>
+                    <span className={`text-[10px] border px-2 py-0.5 rounded-full font-black uppercase tracking-tight ${badgeColor}`}>
+                      {badgeText}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-[11px] font-sans">
+                    <div className="space-y-0.5 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
+                      <span className="text-slate-450 font-bold block text-[10px]">Cambios de Pestaña:</span>
+                      <strong className={`font-mono text-xs ${tabChanges > 0 ? "text-rose-600 font-black" : "text-slate-700"}`}>
+                        {tabChanges}
+                      </strong>
+                    </div>
+
+                    <div className="space-y-0.5 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
+                      <span className="text-slate-455 font-bold block text-[10px]">Desconexiones:</span>
+                      <strong className={`font-mono text-xs ${disconnects > 0 ? "text-rose-600 font-black" : "text-slate-700"}`}>
+                        {disconnects}
+                      </strong>
+                    </div>
+                  </div>
+
+                  {p.lastEventName ? (
+                    <div className="text-[10.5px] border-t border-slate-50 pt-2 flex flex-col gap-0.5">
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className="text-slate-450 font-semibold">Último Evento:</span>
+                        <span className="text-slate-450 font-mono">{p.lastEventTime || "N/A"}</span>
+                      </div>
+                      <strong className="text-rose-700 uppercase font-black tracking-tight font-sans text-xs">
+                        {p.lastEventName}
+                      </strong>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-400 font-semibold italic text-center pt-1 border-t border-slate-50">
+                      Sin eventos de fuga o desconexión.
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Classroom Progress Lists details */}

@@ -15,6 +15,12 @@ import JeopardyGame from "../games/jeopardy/JeopardyGame";
 import ExamMode from "../games/exam-mode/ExamMode";
 import NetworkDiagnostic from "./NetworkDiagnostic";
 import QRCode from "qrcode";
+import { playGameSound } from "../lib/sound";
+import { GAMES_REGISTRY } from "../gamesRegistry";
+import PictionaryGame from "../games/pictionary/PictionaryGame";
+import HorseRaceGame from "../games/horse-race/HorseRaceGame";
+import HeadbanzGame from "../games/headbanz/HeadbanzGame";
+import Conecta4Game from "../games/conecta4/Conecta4Game";
 
 interface TeacherDashboardProps {
   onCreateNew: () => void;
@@ -92,8 +98,9 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
   // Platform multi-game modes (2.0.0)
   const [activeGameType, setActiveGameType] = useState<'quiz_live' | 'mexicanos' | 'jeopardy' | 'exam'>('quiz_live');
   const [hostingGameType, setHostingGameType] = useState<'quiz_live' | 'mexicanos' | 'jeopardy' | 'exam'>('quiz_live');
-  const [selectedDashboardGame, setSelectedDashboardGame] = useState<'quiz_live' | 'mexicanos' | 'jeopardy' | 'exam' | null>(null);
+  const [selectedDashboardGame, setSelectedDashboardGame] = useState<string | null>(null);
   const [activeQuiz, setActiveQuiz] = useState<Questionnaire | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>("Todos");
 
   // Podium (Final stand)
   const [podium, setPodium] = useState<Player[]>([]);
@@ -395,11 +402,15 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
       setTimerRemaining(data.timeLimit);
       setAnsweredCount(0);
       setRevealData(null);
+      playGameSound("inicio_pregunta");
     });
 
     socket.on("question:tick", (data: { timer: number; answeredCount: number }) => {
       setTimerRemaining(data.timer);
       setAnsweredCount(data.answeredCount);
+      if (data.timer <= 5 && data.timer > 0) {
+        playGameSound("cuenta_regresiva");
+      }
     });
 
     socket.on("player:answered-count", (data: { answeredCount: number; totalInGame: number }) => {
@@ -416,6 +427,7 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
       });
       // Synchronize in-memory scores too
       setPlayersList(data.players);
+      playGameSound("final_pregunta");
     });
 
     // Generic game state updates (lobby/reveals/leaderboards)
@@ -443,10 +455,12 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
       if (data.status === "leaderboard") {
         setGameStatus("leaderboard");
         setLeaderboard(data.leaderboard);
+        playGameSound("cambio_ranking");
       }
       if (data.status === "ended") {
         setGameStatus("ended");
         setPodium(data.podium);
+        playGameSound("podio");
       }
     });
 
@@ -501,7 +515,7 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     if (!gameResultsData) return;
     try {
       const title = gameResultsData.title || "Partida";
@@ -666,6 +680,28 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
       XLSX.utils.book_append_sheet(wb, wsResultados, "Resultados");
       XLSX.utils.book_append_sheet(wb, wsDetalles, "Detalle por pregunta");
       XLSX.utils.book_append_sheet(wb, wsTemas, "Resumen por tema");
+
+      // Fetch and append universal buzzer statistics
+      try {
+        const response = await fetch("/api/buzzer/history");
+        if (response.ok) {
+          const buzzerHistory = await response.json();
+          if (Array.isArray(buzzerHistory) && buzzerHistory.length > 0) {
+            const buzzerSheetData = buzzerHistory.map((b: any) => ({
+              "Alumno": b.playerName,
+              "Equipo": b.teamName || "Individual",
+              "Juego": b.gameMode || "General",
+              "Posición": b.position,
+              "Tiempo": b.reactionTime ? `${(b.reactionTime / 1000).toFixed(3)} s` : "N/A",
+              "Fecha": b.date || new Date(b.timestamp).toLocaleDateString()
+            }));
+            const wsBuzzer = XLSX.utils.json_to_sheet(buzzerSheetData);
+            XLSX.utils.book_append_sheet(wb, wsBuzzer, "Estadísticas Buzzer");
+          }
+        }
+      } catch (err) {
+        console.warn("Could not load buzzer history for Excel report:", err);
+      }
 
       XLSX.writeFile(wb, `resultados_${title.toLowerCase().replace(/[^a-z0-9]/g, "_")}.xlsx`);
     } catch (e) {
@@ -858,7 +894,7 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
           players={playersList} 
           teams={activeTeams} 
           onBackToMenu={() => {
-            if (window.confirm("¿Seguro que deseas concluir esta partida de 100 Mexicanos Dijeron?")) {
+            if (window.confirm("¿Seguro que deseas concluir esta partida de 100 Estudiantes Dijeron?")) {
               socket.emit("host:end-game", { pin: activePin });
               setActivePin(null);
               setGameStatus(null);
@@ -1849,110 +1885,121 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
           <div className="space-y-1.5 relative z-10">
             <span className="bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-[9px] font-black uppercase tracking-widest px-2.5 py-0.5 rounded-full inline-block">
-              ★ Prepmaster v2.0.0
+              ★ Prepmaster v2.5.0
             </span>
             <h1 className="text-2xl sm:text-3xl font-black text-white font-sans tracking-tight">PREPMASTER LIVE</h1>
             <p className="text-slate-400 text-xs sm:text-sm max-w-xl">
-              Bienvenido al centro interactivo de gamificación local. Transforma tus reactivos en emocionantes juegos interactivos multilaterales sin dependencias de internet.
+              Bienvenido al centro interactivo de gamificación local. Conectividad local, aprendizaje infinito. Transforma reactivos en espectaculares dinámicas de aula en tiempo real.
             </p>
           </div>
         </div>
 
-        {/* 4 Interactive Modular Games Cards Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6" id="platform-games-grid">
-          
-          {/* Card 1: Quiz Live */}
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 flex flex-col justify-between hover:border-indigo-500 hover:shadow-lg transition-all duration-150 relative group">
-            <div className="space-y-3">
-              <div className="w-12 h-12 bg-indigo-50 border border-indigo-150 text-indigo-600 rounded-2xl flex items-center justify-center text-2xl shadow-xs">
-                🎯
-              </div>
-              <h3 className="text-lg font-black text-slate-800 font-sans">Quiz Live</h3>
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                El clásico juego de opción múltiple con tiempo límite y tabla de posiciones. Perfecto para revivir la competitividad sana y repasar conceptos de forma colectiva.
-              </p>
+        {/* Dynamic Category Filters */}
+        <div className="bg-white border border-slate-200 p-4 rounded-2xl flex flex-wrap items-center justify-between gap-3 shadow-xs" id="categories-filter-bar">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-black text-slate-500 uppercase tracking-wider font-mono">Categoría:</span>
+            <div className="flex flex-wrap gap-1.5">
+              {["Todos", "Evaluación", "Trivia", "Estrategia", "Creatividad", "Colaborativo"].map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`px-3 py-1.5 text-xs font-black rounded-lg transition-all border cursor-pointer ${
+                    selectedCategory === cat
+                      ? "bg-indigo-600 border-indigo-750 text-white shadow-sm"
+                      : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
             </div>
-            <button
-              onClick={() => {
-                setSelectedDashboardGame("quiz_live");
-                setHostingGameType("quiz_live");
-              }}
-              className="mt-6 w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              <span>Crear Juego</span>
-              <ArrowRight size={13} />
-            </button>
           </div>
+          <span className="text-[10px] text-slate-400 font-mono font-bold uppercase">
+            {GAMES_REGISTRY.length} módulos preparados
+          </span>
+        </div>
 
-          {/* Card 2: 100 Mexicanos Dijeron */}
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 flex flex-col justify-between hover:border-amber-500 hover:shadow-lg transition-all duration-150 relative group">
-            <div className="space-y-3">
-              <div className="w-12 h-12 bg-amber-50 border border-amber-150 text-amber-600 rounded-2xl flex items-center justify-center text-2xl shadow-xs">
-                🇲🇽
+        {/* Dynamic Interactive Modular Games Cards Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="platform-games-grid">
+          {GAMES_REGISTRY.filter((game) => selectedCategory === "Todos" || game.category === selectedCategory).map((game) => {
+            const mappedId = game.id === "exam_mode" ? "exam" : game.id;
+            return (
+              <div 
+                key={game.id} 
+                className={`bg-white border rounded-3xl p-6 flex flex-col justify-between transition-all duration-200 relative group h-[320px] ${
+                  game.enabled 
+                    ? `border-slate-200 hover:border-indigo-500 hover:shadow-lg hover:-translate-y-0.5` 
+                    : `border-slate-150 bg-slate-50/50 opacity-75`
+                }`}
+              >
+                <div className="space-y-3.5">
+                  {/* Card Header Row */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="w-11 h-11 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-center text-xl shadow-xs select-none">
+                      {game.icon}
+                    </div>
+                    <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full border ${
+                      game.category === "Evaluación" ? "bg-red-50 border-red-150 text-red-600 font-sans" :
+                      game.category === "Trivia" ? "bg-indigo-50 border-indigo-150 text-indigo-600 font-sans" :
+                      game.category === "Estrategia" ? "bg-violet-50 border-violet-150 text-violet-600 font-sans" :
+                      game.category === "Creatividad" ? "bg-emerald-50 border-emerald-150 text-emerald-600 font-sans" :
+                      "bg-amber-50 border-amber-150 text-amber-700 font-sans"
+                    }`}>
+                      {game.category}
+                    </span>
+                  </div>
+
+                  {/* Title and description */}
+                  <div>
+                    <h3 className="text-md sm:text-base font-black text-slate-950 font-sans tracking-tight">
+                      {game.name}
+                    </h3>
+                    <p className="text-xs text-slate-500 leading-relaxed font-sans mt-1 line-clamp-2 h-8" title={game.description}>
+                      {game.description}
+                    </p>
+                  </div>
+
+                  {/* Metadata labels row */}
+                  <div className="flex items-center gap-3 text-[10px] font-bold text-slate-450 border-t border-slate-100 pt-2.5">
+                    <span className="bg-slate-100 px-2 py-0.5 rounded select-none">⏳ {game.duration}</span>
+                    <span className="bg-slate-100 px-2 py-0.5 rounded select-none">👥 {game.players}</span>
+                  </div>
+
+                  {/* Highlighted Game Features */}
+                  <div className="flex flex-wrap gap-1 pb-1">
+                    {game.features.map((feat, i) => (
+                      <span key={i} className="text-[10px] bg-slate-50 border border-slate-150 px-2 py-0.5 rounded-full font-bold text-slate-600">
+                        {feat}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Main dynamic button */}
+                {game.enabled ? (
+                  <button
+                    onClick={() => {
+                      setSelectedDashboardGame(mappedId as any);
+                      setHostingGameType(mappedId as any);
+                    }}
+                    className={`mt-4 w-full py-2.5 text-white font-sans font-black text-xs rounded-xl shadow-xs transition-all hover:shadow-md cursor-pointer flex items-center justify-center gap-1.5 ${
+                      game.id === "mexicanos" ? "bg-amber-600 hover:bg-amber-700 hover:shadow-amber-500/10 text-slate-950" : "bg-indigo-600 hover:bg-indigo-700 hover:shadow-indigo-500/10"
+                    }`}
+                  >
+                    <span>Crear Juego</span>
+                    <ArrowRight size={13} />
+                  </button>
+                ) : (
+                  <button
+                    disabled
+                    className="mt-4 w-full py-2.5 bg-slate-100 text-slate-400 font-sans font-black text-xs rounded-xl border border-slate-200 cursor-not-allowed flex items-center justify-center gap-1"
+                  >
+                    <span>Próximamente</span>
+                  </button>
+                )}
               </div>
-              <h3 className="text-lg font-black text-slate-800 font-sans">100 Mexicanos Dijeron</h3>
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Adivina las respuestas más comunes de encuestas colectivas. Permite configurar equipos, buzzer (timbre) interactivo, acumulación de puntos y límite de 3 errores.
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setSelectedDashboardGame("mexicanos");
-                setHostingGameType("mexicanos");
-              }}
-              className="mt-6 w-full py-3 bg-amber-600 hover:bg-amber-700 text-slate-950 font-black text-xs rounded-xl shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              <span>Crear Juego</span>
-              <ArrowRight size={13} />
-            </button>
-          </div>
-
-          {/* Card 3: Jeopardy */}
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 flex flex-col justify-between hover:border-indigo-600 hover:shadow-lg transition-all duration-150 relative group">
-            <div className="space-y-3">
-              <div className="w-12 h-12 bg-indigo-50 border border-indigo-150 text-indigo-700 rounded-2xl flex items-center justify-center text-2xl shadow-xs">
-                🧠
-              </div>
-              <h3 className="text-lg font-black text-slate-800 font-sans">Jeopardy</h3>
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Explora un gran tablero modular dividido por puntajes y categorías. Los equipos piden desafíos de 200 a 1000 puntos y marcan sus logros en tiempo real.
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setSelectedDashboardGame("jeopardy");
-                setHostingGameType("jeopardy");
-              }}
-              className="mt-6 w-full py-3 bg-indigo-650 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              <span>Crear Juego</span>
-              <ArrowRight size={13} />
-            </button>
-          </div>
-
-          {/* Card 4: Modo Examen */}
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 flex flex-col justify-between hover:border-emerald-600 hover:shadow-lg transition-all duration-150 relative group">
-            <div className="space-y-3">
-              <div className="w-12 h-12 bg-emerald-50 border border-emerald-150 text-emerald-600 rounded-2xl flex items-center justify-center text-2xl shadow-xs">
-                📝
-              </div>
-              <h3 className="text-lg font-black text-slate-800 font-sans">Modo Examen</h3>
-              <p className="text-xs text-slate-500 leading-relaxed font-sans">
-                Sin ranking, sin podio y a tiempo libre. Evalúa de forma silenciosa e individual. Descarga planillas interactivas automatizadas directo en Microsoft Excel.
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setSelectedDashboardGame("exam");
-                setHostingGameType("exam");
-              }}
-              className="mt-6 w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs rounded-xl shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              <span>Crear Juego</span>
-              <ArrowRight size={13} />
-            </button>
-          </div>
-
+            );
+          })}
         </div>
 
         {/* Bancos de Juegos Independientes */}
@@ -1998,8 +2045,8 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
               }}
               className="bg-amber-50/55 border border-amber-100 hover:border-amber-400 p-4 rounded-2xl text-center cursor-pointer transition-all hover:shadow-md"
             >
-              <div className="text-xl">🇲🇽</div>
-              <p className="text-xs font-black text-amber-950 mt-1.5 leading-none">100 Mexicanos</p>
+              <div className="text-xl">🧑‍🎓</div>
+              <p className="text-xs font-black text-amber-950 mt-1.5 leading-none">100 Estudiantes</p>
               <span className="text-[10px] text-amber-700 font-mono font-semibold mt-2 inline-block bg-amber-100/70 px-2 py-0.5 rounded-full">{bankCounts.mexicanos} cuestionarios</span>
             </button>
 
@@ -2128,11 +2175,40 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
     );
   }
 
+  if (selectedDashboardGame === "pictionary") {
+    return (
+      <PictionaryGame onBack={() => setSelectedDashboardGame(null)} />
+    );
+  }
+
+  if (selectedDashboardGame === "horse_race") {
+    return (
+      <HorseRaceGame onBack={() => setSelectedDashboardGame(null)} />
+    );
+  }
+
+  if (selectedDashboardGame === "headbanz") {
+    return (
+      <HeadbanzGame socket={socket} onBack={() => setSelectedDashboardGame(null)} />
+    );
+  }
+
+  if (selectedDashboardGame === "conecta_4") {
+    const pin = activePin || Math.floor(1000 + Math.random() * 9000).toString();
+    return (
+      <Conecta4Game socket={socket} pin={pin} onExit={() => setSelectedDashboardGame(null)} />
+    );
+  }
+
   const getDashboardGameName = () => {
     if (selectedDashboardGame === "quiz_live") return "Quiz Live";
-    if (selectedDashboardGame === "mexicanos") return "100 Mexicanos Dijeron";
+    if (selectedDashboardGame === "mexicanos") return "100 Estudiantes Dijeron";
     if (selectedDashboardGame === "jeopardy") return "Jeopardy";
     if (selectedDashboardGame === "exam") return "Modo Examen";
+    if (selectedDashboardGame === "pictionary") return "Pictionary Educativo";
+    if (selectedDashboardGame === "horse_race") return "Carrera de Caballos";
+    if (selectedDashboardGame === "headbanz") return "🧠 Headbanz Educativo";
+    if (selectedDashboardGame === "conecta_4") return "🔵 Conecta 4 Educativo 🔴";
     return "";
   };
 

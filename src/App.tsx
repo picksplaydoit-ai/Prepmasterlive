@@ -1,14 +1,18 @@
 import { useState, useEffect } from "react";
-import { Gamepad2, Tv, Users, ArrowLeft, GraduationCap, Laptop, Phone } from "lucide-react";
+import { Gamepad2, Tv, Users, ArrowLeft, GraduationCap, Laptop, Phone, Volume2, VolumeX, Eye, Monitor } from "lucide-react";
 import TeacherDashboard from "./components/TeacherDashboard";
 import QuestionnaireEditor from "./components/QuestionnaireEditor";
 import StudentInterface from "./components/StudentInterface";
 import ReactivosImporter from "./components/ReactivosImporter";
 import { Questionnaire } from "./types";
+import { getSoundsEnabled, setSoundsEnabled } from "./lib/sound";
 
 export default function App() {
   // Screen views: 'home' | 'teacher' | 'student'
   const [role, setRole] = useState<'home' | 'teacher' | 'student'>('home');
+  const [soundsEnabled, setSoundsEnabledState] = useState(getSoundsEnabled());
+  const [highContrast, setHighContrast] = useState<boolean>(() => localStorage.getItem("highContrast") === "true");
+  const [projectorMode, setProjectorMode] = useState<boolean>(() => localStorage.getItem("projectorMode") === "true");
   
   // Teacher-specific routing state
   const [quizView, setQuizView] = useState<'dashboard' | 'editor' | 'importer'>('dashboard');
@@ -33,10 +37,15 @@ export default function App() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-slate-100 font-sans antialiased text-slate-800 flex flex-col justify-between" id="app-container">
+    <div 
+      className={`min-h-screen bg-slate-50 font-sans antialiased text-slate-900 flex flex-col justify-between ${
+        highContrast ? "high-contrast" : ""
+      } ${projectorMode ? "projector-mode" : ""}`} 
+      id="app-container"
+    >
       
       {/* Dynamic top bar */}
-      <header className="border-b border-slate-200 bg-white/90 backdrop-blur-md sticky top-0 z-50 py-4 px-4 sm:px-8 flex items-center justify-between shadow-sm" id="app-header">
+      <header className="border-b border-slate-200 bg-white/90 backdrop-blur-md sticky top-0 z-50 py-4 px-4 sm:px-8 flex items-center justify-between shadow-sm lg:gap-1" id="app-header">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-black text-xl shadow-md">
             P
@@ -51,20 +60,79 @@ export default function App() {
           </div>
         </div>
 
-        {/* Home navigation breadcrumbs */}
-        {role !== 'home' && (
+        {/* Global Toolbar and Home navigation */}
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 justify-end">
+          {/* Sounds toggle button */}
           <button
             onClick={() => {
-              setRole('home');
-              setQuizView('dashboard');
+              const nextState = !soundsEnabled;
+              setSoundsEnabled(nextState);
+              setSoundsEnabledState(nextState);
             }}
-            className="flex items-center gap-2 text-xs font-bold text-indigo-600 hover:text-white hover:bg-indigo-600 bg-indigo-50 border border-indigo-150 py-2 px-4 rounded-xl transition-all cursor-pointer shadow-sm"
-            id="btn-nav-home"
+            className={`flex items-center gap-1.5 text-xs font-black py-2 px-3 sm:px-3.5 rounded-xl transition-all border cursor-pointer shadow-xs ${
+              soundsEnabled
+                ? "bg-emerald-50 border-emerald-150 text-emerald-700 hover:bg-emerald-100"
+                : "bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100"
+            }`}
+            id="global-sounds-toggler"
+            title={soundsEnabled ? "Sonidos Activados" : "Sonidos Silenciados"}
           >
-            <ArrowLeft size={14} />
-            <span>Volver a Inicio</span>
+            {soundsEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+            <span>{soundsEnabled ? "🔊 Sonidos" : "🔇 Silenciar"}</span>
           </button>
-        )}
+
+          {/* High Contrast toggle button */}
+          <button
+            onClick={() => {
+              const nextVal = !highContrast;
+              setHighContrast(nextVal);
+              localStorage.setItem("highContrast", nextVal.toString());
+            }}
+            className={`flex items-center gap-1.5 text-xs font-black py-2 px-3 sm:px-3.5 rounded-xl transition-all border cursor-pointer shadow-xs ${
+              highContrast
+                ? "bg-blue-600 border-blue-750 text-white"
+                : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+            }`}
+            id="accessibility-contrast-toggler"
+            title="Saturación / Contraste accesible"
+          >
+            <Eye size={14} />
+            <span>{highContrast ? "👁️ Alto Contraste On" : "👁️ Alto Contraste"}</span>
+          </button>
+
+          {/* Projector Optimization Toggle */}
+          <button
+            onClick={() => {
+              const nextVal = !projectorMode;
+              setProjectorMode(nextVal);
+              localStorage.setItem("projectorMode", nextVal.toString());
+            }}
+            className={`flex items-center gap-1.5 text-xs font-black py-2 px-3 sm:px-3.5 rounded-xl transition-all border cursor-pointer shadow-xs ${
+              projectorMode
+                ? "bg-violet-600 border-violet-750 text-white"
+                : "bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100"
+            }`}
+            id="accessibility-projector-toggler"
+            title="Optimizar para proyección y baja luminosidad"
+          >
+            <Monitor size={14} />
+            <span>{projectorMode ? "📽️ Modo Proyector On" : "📽️ Modo Proyector"}</span>
+          </button>
+
+          {role !== 'home' && (
+            <button
+              onClick={() => {
+                setRole('home');
+                setQuizView('dashboard');
+              }}
+              className="flex items-center gap-2 text-xs font-bold text-indigo-600 hover:text-white hover:bg-indigo-600 bg-indigo-50 border border-indigo-150 py-2 px-4 rounded-xl transition-all cursor-pointer shadow-sm"
+              id="btn-nav-home"
+            >
+              <ArrowLeft size={14} />
+              <span>Volver a Inicio</span>
+            </button>
+          )}
+        </div>
       </header>
 
       {/* Main Container Workspace */}

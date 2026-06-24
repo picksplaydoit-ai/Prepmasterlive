@@ -64,6 +64,81 @@ db.exec(`
     topicSummary TEXT NOT NULL,
     game_type TEXT DEFAULT 'quiz_live'
   );
+
+  CREATE TABLE IF NOT EXISTS pictionary_word_banks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    topic TEXT,
+    createdAt TEXT NOT NULL,
+    updatedAt TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS pictionary_words (
+    id TEXT PRIMARY KEY,
+    bankId TEXT NOT NULL,
+    word TEXT NOT NULL,
+    category TEXT,
+    difficulty TEXT,
+    hint TEXT,
+    createdAt TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS pictionary_history (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    bankName TEXT NOT NULL,
+    config TEXT NOT NULL,
+    teamScores TEXT NOT NULL,
+    wordsDetailed TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS horse_race_history (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    bankTitle TEXT NOT NULL,
+    config TEXT NOT NULL,
+    results TEXT NOT NULL,
+    playedQuestions TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS headbanz_word_banks (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    createdAt TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS headbanz_words (
+    id TEXT PRIMARY KEY,
+    bankId TEXT NOT NULL,
+    concept TEXT NOT NULL,
+    category TEXT NOT NULL,
+    difficulty TEXT NOT NULL,
+    hint TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS headbanz_history (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    bankName TEXT NOT NULL,
+    config TEXT NOT NULL,
+    playerScores TEXT NOT NULL,
+    conceptsLog TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS buzzer_history (
+    id TEXT PRIMARY KEY,
+    playerId TEXT NOT NULL,
+    playerName TEXT NOT NULL,
+    teamId TEXT,
+    teamName TEXT,
+    gameMode TEXT,
+    timestamp INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    reactionTime REAL NOT NULL,
+    date TEXT NOT NULL
+  );
 `);
 
 try {
@@ -164,6 +239,342 @@ function deleteQuestionnaireFromDb(id: string): void {
     console.error("[SQLite] Error eliminando cuestionario:", error);
   }
 }
+
+// ==========================================
+// PICTIONARY DATABASE OPERATIONS (Prepmaster 2.3.0)
+// ==========================================
+
+function loadPictionaryBanks(): any[] {
+  try {
+    const banks = db.prepare("SELECT * FROM pictionary_word_banks ORDER BY createdAt DESC").all() as any[];
+    return banks.map((bank) => {
+      const words = db.prepare("SELECT * FROM pictionary_words WHERE bankId = ?").all(bank.id) as any[];
+      return {
+        id: bank.id,
+        name: bank.name,
+        description: bank.description || "",
+        topic: bank.topic || "",
+        createdAt: bank.createdAt,
+        updatedAt: bank.updatedAt,
+        words: words.map(w => ({
+          id: w.id,
+          bankId: w.bankId,
+          word: w.word,
+          category: w.category || "",
+          difficulty: w.difficulty || "Media",
+          hint: w.hint || "",
+          createdAt: w.createdAt
+        }))
+      };
+    });
+  } catch (error) {
+    console.error("[SQLite] Error cargando bancos de Pictionary:", error);
+    return [];
+  }
+}
+
+const savePictionaryBankTrans = db.transaction((bank: any) => {
+  db.prepare(`
+    INSERT OR REPLACE INTO pictionary_word_banks (id, name, description, topic, createdAt, updatedAt)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    bank.id,
+    bank.name,
+    bank.description || "",
+    bank.topic || "",
+    bank.createdAt,
+    bank.updatedAt
+  );
+
+  db.prepare("DELETE FROM pictionary_words WHERE bankId = ?").run(bank.id);
+
+  const insertWord = db.prepare(`
+    INSERT INTO pictionary_words (id, bankId, word, category, difficulty, hint, createdAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  for (const w of (bank.words || [])) {
+    insertWord.run(
+      w.id || Math.random().toString(36).substring(2, 11),
+      bank.id,
+      w.word,
+      w.category || "",
+      w.difficulty || "Media",
+      w.hint || "",
+      w.createdAt || new Date().toISOString()
+    );
+  }
+});
+
+function savePictionaryBank(bank: any): void {
+  try {
+    savePictionaryBankTrans(bank);
+    console.log(`[SQLite] Guardado banco Pictionary ID ${bank.id} con ${bank.words?.length || 0} palabras.`);
+  } catch (error) {
+    console.error("[SQLite] Error guardando banco Pictionary:", error);
+    throw error;
+  }
+}
+
+function deletePictionaryBank(id: string): void {
+  try {
+    const deleteTrans = db.transaction(() => {
+      db.prepare("DELETE FROM pictionary_word_banks WHERE id = ?").run(id);
+      db.prepare("DELETE FROM pictionary_words WHERE bankId = ?").run(id);
+    });
+    deleteTrans();
+    console.log(`[SQLite] Eliminado banco Pictionary ID ${id} y sus palabras.`);
+  } catch (error) {
+    console.error("[SQLite] Error eliminando banco Pictionary:", error);
+  }
+}
+
+function duplicatePictionaryBank(originalId: string): any {
+  try {
+    const bank = db.prepare("SELECT * FROM pictionary_word_banks WHERE id = ?").get(originalId) as any;
+    if (!bank) return null;
+    const words = db.prepare("SELECT * FROM pictionary_words WHERE bankId = ?").all(originalId) as any[];
+
+    const newId = Math.random().toString(36).substring(2, 11);
+    const newBank = {
+      id: newId,
+      name: `${bank.name} (Copia)`,
+      description: bank.description || "",
+      topic: bank.topic || "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      words: words.map(w => ({
+        id: Math.random().toString(36).substring(2, 11),
+        bankId: newId,
+        word: w.word,
+        category: w.category || "",
+        difficulty: w.difficulty || "Media",
+        hint: w.hint || "",
+        createdAt: new Date().toISOString()
+      }))
+    };
+
+    savePictionaryBank(newBank);
+    return newBank;
+  } catch (error) {
+    console.error("[SQLite] Error duplicando banco Pictionary:", error);
+    return null;
+  }
+}
+
+function loadPictionaryHistory(): any[] {
+  try {
+    const rows = db.prepare("SELECT * FROM pictionary_history ORDER BY date DESC").all() as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      date: r.date,
+      bankName: r.bankName,
+      config: JSON.parse(r.config),
+      teamScores: JSON.parse(r.teamScores),
+      wordsDetailed: JSON.parse(r.wordsDetailed)
+    }));
+  } catch (error) {
+    console.error("[SQLite] Error cargando historial de Pictionary:", error);
+    return [];
+  }
+}
+
+function savePictionaryHistory(item: any): void {
+  try {
+    const insert = db.prepare(`
+      INSERT INTO pictionary_history (id, date, bankName, config, teamScores, wordsDetailed)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run(
+      item.id || Math.random().toString(36).substring(2, 11),
+      item.date || new Date().toISOString(),
+      item.bankName,
+      JSON.stringify(item.config),
+      JSON.stringify(item.teamScores),
+      JSON.stringify(item.wordsDetailed)
+    );
+    console.log(`[SQLite] Registro de partida Pictionary guardado en historial.`);
+  } catch (error) {
+    console.error("[SQLite] Error guardando historial Pictionary:", error);
+  }
+}
+
+function loadHorseRaceHistory(): any[] {
+  try {
+    const rows = db.prepare("SELECT * FROM horse_race_history ORDER BY date DESC").all() as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      date: r.date,
+      bankTitle: r.bankTitle,
+      config: JSON.parse(r.config),
+      results: JSON.parse(r.results),
+      playedQuestions: JSON.parse(r.playedQuestions)
+    }));
+  } catch (error) {
+    console.error("[SQLite] Error cargando historial de Carrera de Caballos:", error);
+    return [];
+  }
+}
+
+function saveHorseRaceHistory(item: any): void {
+  try {
+    const insert = db.prepare(`
+      INSERT INTO horse_race_history (id, date, bankTitle, config, results, playedQuestions)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run(
+      item.id || Math.random().toString(36).substring(2, 11),
+      item.date || new Date().toISOString(),
+      item.bankTitle,
+      JSON.stringify(item.config),
+      JSON.stringify(item.results),
+      JSON.stringify(item.playedQuestions)
+    );
+    console.log(`[SQLite] Registro de partida Carrera de Caballos guardado en historial.`);
+  } catch (error) {
+    console.error("[SQLite] Error guardando historial Carrera de Caballos:", error);
+  }
+}
+
+// ==========================================
+// HEADBANZ SQLITE HELPERS & SEEDING (Prepmaster 2.5.0)
+// ==========================================
+
+function loadHeadbanzBanks(): any[] {
+  try {
+    const banks = db.prepare("SELECT * FROM headbanz_word_banks ORDER BY createdAt DESC").all() as any[];
+    return banks.map((bank: any) => {
+      const words = db.prepare("SELECT * FROM headbanz_words WHERE bankId = ?").all(bank.id);
+      return {
+        ...bank,
+        words
+      };
+    });
+  } catch (err) {
+    console.error("[SQLite] Error cargando bancos de Headbanz:", err);
+    return [];
+  }
+}
+
+function saveHeadbanzBank(bank: any): void {
+  try {
+    const insertBank = db.prepare(`
+      INSERT INTO headbanz_word_banks (id, name, description, createdAt)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        description = excluded.description
+    `);
+    
+    insertBank.run(
+      bank.id,
+      bank.name,
+      bank.description || "",
+      bank.createdAt || new Date().toISOString()
+    );
+
+    // Delete existing words and insert new ones
+    db.prepare("DELETE FROM headbanz_words WHERE bankId = ?").run(bank.id);
+
+    const insertWord = db.prepare(`
+      INSERT INTO headbanz_words (id, bankId, concept, category, difficulty, hint)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    if (bank.words && Array.isArray(bank.words)) {
+      bank.words.forEach((w: any) => {
+        insertWord.run(
+          w.id || Math.random().toString(36).substring(2, 11),
+          bank.id,
+          w.concept,
+          w.category || "General",
+          w.difficulty || "medio",
+          w.hint || ""
+        );
+      });
+    }
+    console.log(`[SQLite] Banco de Headbanz '${bank.name}' guardado correctamente.`);
+  } catch (err) {
+    console.error("[SQLite] Error guardando banco de Headbanz:", err);
+  }
+}
+
+function deleteHeadbanzBank(id: string): void {
+  try {
+    db.prepare("DELETE FROM headbanz_word_banks WHERE id = ?").run(id);
+    db.prepare("DELETE FROM headbanz_words WHERE bankId = ?").run(id);
+    console.log(`[SQLite] Banco de Headbanz '${id}' eliminado.`);
+  } catch (err) {
+    console.error("[SQLite] Error eliminando banco de Headbanz:", err);
+  }
+}
+
+function saveHeadbanzHistory(item: any): void {
+  try {
+    const insert = db.prepare(`
+      INSERT INTO headbanz_history (id, date, bankName, config, playerScores, conceptsLog)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run(
+      item.id || Math.random().toString(36).substring(2, 11),
+      item.date || new Date().toISOString(),
+      item.bankName,
+      JSON.stringify(item.config),
+      JSON.stringify(item.playerScores),
+      JSON.stringify(item.conceptsLog)
+    );
+    console.log(`[SQLite] Historial de Headbanz guardado correctamente.`);
+  } catch (err) {
+    console.error("[SQLite] Error guardando historial de Headbanz:", err);
+  }
+}
+
+function seedHeadbanzDefaultBanks(): void {
+  try {
+    const count = db.prepare("SELECT COUNT(*) as cnt FROM headbanz_word_banks").get() as { cnt: number };
+    if (count.cnt > 0) return;
+
+    console.log("[SQLite] Sembrando banco predeterminado Ciencias Biológicas para Headbanz...");
+    const bankId = "seed_biology_1";
+    
+    db.prepare(`
+      INSERT INTO headbanz_word_banks (id, name, description, createdAt)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      bankId,
+      "Ciencias Biológicas 🌿",
+      "Procesos, células, genética y orgánulos fundamentales de la biología de nivel preparatoria.",
+      new Date().toISOString()
+    );
+
+    const insertWord = db.prepare(`
+      INSERT INTO headbanz_words (id, bankId, concept, category, difficulty, hint)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    const seedWords = [
+      { id: "sb1", concept: "Fotosíntesis", category: "Procesos", difficulty: "medio", hint: "Convierte luz solar en glucosa." },
+      { id: "sb2", concept: "Mitosis", category: "Procesos", difficulty: "medio", hint: "División celular que genera células hijas idénticas." },
+      { id: "sb3", concept: "Mitocondria", category: "Orgánulos", difficulty: "medio", hint: "La central energética de la célula." },
+      { id: "sb4", concept: "ADN", category: "Genética", difficulty: "facil", hint: "Contiene las instrucciones genéticas de la vida." },
+      { id: "sb5", concept: "Cloroplasto", category: "Orgánulos", difficulty: "medio", hint: "Orgánulo donde ocurre la fotosíntesis." },
+      { id: "sb6", concept: "Enzima", category: "Bioquímica", difficulty: "dificil", hint: "Proteína que actúa como catalizador biológico." },
+      { id: "sb7", concept: "Neurona", category: "Células", difficulty: "facil", hint: "Célula especializada en transmitir impulsos nerviosos." },
+      { id: "sb8", concept: "Glóbulo Rojo", category: "Células", difficulty: "facil", hint: "Transporta oxígeno en la sangre." }
+    ];
+
+    seedWords.forEach(w => {
+      insertWord.run(w.id, bankId, w.concept, w.category, w.difficulty, w.hint);
+    });
+
+    console.log("[SQLite] Sembrado completado de Ciencias Biológicas.");
+  } catch (err) {
+    console.error("[SQLite] Error sembrando base de datos de Headbanz:", err);
+  }
+}
+
+// Run DB seeding
+seedHeadbanzDefaultBanks();
 
 function getTeamRankingsAndStats(session: GameSession) {
   if (session.gameMode !== "teams" || !session.teams || session.teams.length === 0) {
@@ -636,6 +1047,243 @@ app.get("/api/network-diagnostic", async (req, res) => {
   });
 });
 
+// ==========================================
+// PICTIONARY REST ENDPOINTS (Prepmaster 2.3.0)
+// ==========================================
+
+// List Pictionary word banks
+app.get("/api/pictionary/banks", (req, res) => {
+  const banks = loadPictionaryBanks();
+  res.json(banks);
+});
+
+// Save (create or update) Pictionary word bank
+app.post("/api/pictionary/banks", express.json(), (req, res) => {
+  try {
+    const bank = req.body;
+    if (!bank.id) {
+      bank.id = Math.random().toString(36).substring(2, 11);
+    }
+    if (!bank.createdAt) {
+      bank.createdAt = new Date().toISOString();
+    }
+    bank.updatedAt = new Date().toISOString();
+    
+    savePictionaryBank(bank);
+    res.json({ success: true, bank });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Delete Pictionary word bank
+app.delete("/api/pictionary/banks/:id", (req, res) => {
+  try {
+    deletePictionaryBank(req.params.id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Duplicate Pictionary word bank
+app.post("/api/pictionary/banks/:id/duplicate", (req, res) => {
+  try {
+    const duplicated = duplicatePictionaryBank(req.params.id);
+    if (!duplicated) {
+      return res.status(404).json({ success: false, error: "Banco original no encontrado" });
+    }
+    res.json({ success: true, bank: duplicated });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// List Pictionary history
+app.get("/api/pictionary/history", (req, res) => {
+  const history = loadPictionaryHistory();
+  res.json(history);
+});
+
+// Save Pictionary game history
+app.post("/api/pictionary/history", express.json(), (req, res) => {
+  try {
+    const item = req.body;
+    if (!item.id) {
+      item.id = Math.random().toString(36).substring(2, 11);
+    }
+    if (!item.date) {
+      item.date = new Date().toISOString();
+    }
+    savePictionaryHistory(item);
+    res.json({ success: true, item });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// List universal buzzer history
+app.get("/api/buzzer/history", (req, res) => {
+  try {
+    const rows = db.prepare("SELECT * FROM buzzer_history ORDER BY timestamp DESC").all();
+    res.json(rows);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Get universal buzzer computed stats and rankings
+app.get("/api/buzzer/stats", (req, res) => {
+  try {
+    const fastestAllTime = db.prepare(`
+      SELECT playerName, teamName, gameMode, reactionTime, date
+      FROM buzzer_history
+      WHERE reactionTime > 0.01
+      ORDER BY reactionTime ASC
+      LIMIT 1
+    `).get();
+
+    const bestReflexesTeam = db.prepare(`
+      SELECT teamName, AVG(reactionTime) as avgTime
+      FROM buzzer_history
+      WHERE teamName IS NOT NULL AND teamName != '' AND reactionTime > 0.01
+      GROUP BY teamName
+      ORDER BY avgTime ASC
+      LIMIT 1
+    `).get();
+
+    const overallAvg = db.prepare(`
+      SELECT AVG(reactionTime) as avgTime
+      FROM buzzer_history
+      WHERE reactionTime > 0.01
+    `).get() as any;
+
+    const lastSession = db.prepare(`
+      SELECT gameMode, timestamp
+      FROM buzzer_history
+      ORDER BY timestamp DESC
+      LIMIT 1
+    `).get() as any;
+
+    let fastestLastSession = null;
+    if (lastSession) {
+      // Find the fastest in that same timestamp cluster/run (within last 1 minute)
+      fastestLastSession = db.prepare(`
+        SELECT playerName, teamName, reactionTime
+        FROM buzzer_history
+        WHERE timestamp >= ? - 60000 AND timestamp <= ? + 60000 AND reactionTime > 0.01
+        ORDER BY reactionTime ASC
+        LIMIT 1
+      `).get(lastSession.timestamp, lastSession.timestamp);
+    }
+
+    res.json({
+      fastestAllTime: fastestAllTime || null,
+      bestReflexesTeam: bestReflexesTeam || null,
+      overallAvg: overallAvg ? overallAvg.avgTime : null,
+      fastestLastSession: fastestLastSession || null
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// List Horse Race history
+app.get("/api/horse-race/history", (req, res) => {
+  const history = loadHorseRaceHistory();
+  res.json(history);
+});
+
+// Save Horse Race game history
+app.post("/api/horse-race/history", express.json(), (req, res) => {
+  try {
+    const item = req.body;
+    if (!item.id) {
+      item.id = Math.random().toString(36).substring(2, 11);
+    }
+    if (!item.date) {
+      item.date = new Date().toISOString();
+    }
+    saveHorseRaceHistory(item);
+    res.json({ success: true, item });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ==========================================
+// HEADBANZ REST API ENDPOINTS (Prepmaster 2.5.0)
+// ==========================================
+
+// Get all Headbanz word banks
+app.get("/api/headbanz/banks", (req, res) => {
+  try {
+    const banks = loadHeadbanzBanks();
+    res.json(banks);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Create/Update Headbanz word bank
+app.post("/api/headbanz/banks", express.json(), (req, res) => {
+  try {
+    const bank = req.body;
+    if (!bank.id) {
+      bank.id = Math.random().toString(36).substring(2, 11);
+    }
+    if (!bank.createdAt) {
+      bank.createdAt = new Date().toISOString();
+    }
+    saveHeadbanzBank(bank);
+    res.json({ success: true, bank });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Delete Headbanz word bank
+app.delete("/api/headbanz/banks/:id", (req, res) => {
+  try {
+    const { id } = req.params;
+    deleteHeadbanzBank(id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Duplicate Headbanz word bank
+app.post("/api/headbanz/banks/:id/duplicate", (req, res) => {
+  try {
+    const { id } = req.params;
+    const banks = loadHeadbanzBanks();
+    const source = banks.find((b: any) => b.id === id);
+    if (!source) {
+      return res.status(404).json({ success: false, message: "Banco no encontrado." });
+    }
+
+    const copy = {
+      id: Math.random().toString(36).substring(2, 11),
+      name: `${source.name} (Copia)`,
+      description: source.description || "",
+      createdAt: new Date().toISOString(),
+      words: (source.words || []).map((w: any) => ({
+        id: Math.random().toString(36).substring(2, 11),
+        concept: w.concept,
+        category: w.category,
+        difficulty: w.difficulty,
+        hint: w.hint
+      }))
+    };
+
+    saveHeadbanzBank(copy);
+    res.json({ success: true, bank: copy });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // List Questionnaires
 app.get("/api/questionnaires", (req, res) => {
   let questionnaires = loadQuestionnaires();
@@ -854,7 +1502,7 @@ Ronda: 2`);
       } else {
         const wb = XLSX.utils.book_new();
         const ws = XLSX.utils.json_to_sheet(rows);
-        XLSX.utils.book_append_sheet(wb, ws, "100 Mexicanos");
+        XLSX.utils.book_append_sheet(wb, ws, "100 Estudiantes");
         const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
         res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
@@ -1000,6 +1648,7 @@ app.get("/api/session-results/:pin", (req, res) => {
       gameMode: session.gameMode || "individual",
       teams: session.teams || [],
       examProgress: (session as any).examProgress || {},
+      examEvents: (session as any).examEvents || [],
       timeLimitMinutes: (session as any).timeLimitMinutes || null
     });
     return;
@@ -1929,6 +2578,40 @@ function parseSpreadsheetRows(rows: any[][], sanitize: (val: any) => string): an
   return result;
 }
 
+// Global active Pictionary rooms storage
+const pictionarySessions: Record<string, any> = {};
+
+// Global active Horse Race rooms storage
+const horseRaceSessions: Record<string, any> = {};
+
+// Global active Headbanz rooms storage
+const headbanzSessions: Record<string, any> = {};
+
+// Global active Conecta 4 rooms storage
+const conecta4Sessions: Record<string, any> = {};
+
+// Global active Buzzer rooms storage
+interface ServerBuzzerPress {
+  playerId: string;
+  playerName: string;
+  teamId: string | null;
+  teamName: string | null;
+  gameMode: string;
+  timestamp: number;
+  position: number;
+  reactionTime: number;
+}
+
+interface ServerBuzzerSession {
+  pin: string;
+  startTime: number;
+  isOpen: boolean;
+  presses: ServerBuzzerPress[];
+  pressedPlayers: Set<string>;
+}
+
+const buzzerSessions: Record<string, ServerBuzzerSession> = {};
+
 // Real-time server timers control
 function clearRoomInterval(pin: string): void {
   if (timerIntervals[pin]) {
@@ -1939,6 +2622,392 @@ function clearRoomInterval(pin: string): void {
 
 // Websocket Events
 io.on("connection", (socket: Socket) => {
+  // ==========================================
+  // PICTIONARY SOCKET.IO ACTIONS (Prepmaster 2.3.0)
+  // ==========================================
+
+  socket.on("pictionary:create-room", ({ pin, config, bankName }: { pin: string; config: any; bankName: string }) => {
+    socket.join(`game:${pin}`);
+    socket.join(`host:${pin}`);
+    
+    pictionarySessions[pin] = {
+      pin,
+      bankName,
+      config,
+      players: {}, // socketId -> Player
+      scores: {},  // teamId -> score
+      wordsDetailed: [], // detailed records of words used
+      status: "lobby",
+      currentWord: null,
+      currentDrawer: null,
+      currentTeamIndex: 0,
+      currentTeamId: null,
+      drawerIndexMap: {}, // teamId -> player drawing index
+      roundNumber: 1,
+      totalWordsCount: config.totalWords || 5,
+      wordsUsed: []
+    };
+
+    io.to(`game:${pin}`).emit("pictionary:room-created", {
+      pin,
+      config,
+      bankName,
+      status: "lobby"
+    });
+  });
+
+  socket.on("pictionary:join-team", ({ pin, name, avatarId, teamId, playerId }: { pin: string; name: string; avatarId?: string; teamId: string; playerId?: string }) => {
+    socket.join(`game:${pin}`);
+    
+    let session = pictionarySessions[pin];
+    if (!session) {
+      socket.emit("pictionary:error", { message: "Sesión de Pictionary no encontrada" });
+      return;
+    }
+
+    const pId = playerId || socket.id;
+    const player = {
+      id: socket.id,
+      playerId: pId,
+      name,
+      avatarId: avatarId || "cult_mariachi",
+      teamId,
+      isDrawer: false
+    };
+
+    session.players[socket.id] = player;
+
+    // Send success to player
+    socket.emit("pictionary:join-success", {
+      player,
+      pin,
+      config: session.config,
+      bankName: session.bankName,
+      status: session.status
+    });
+
+    // Notify all in room
+    io.to(`game:${pin}`).emit("pictionary:player-list", {
+      players: Object.values(session.players)
+    });
+  });
+
+  socket.on("pictionary:set-team-size", ({ pin, teamId, size }: { pin: string; teamId: string; size: number }) => {
+    const session = pictionarySessions[pin];
+    if (!session) return;
+
+    const team = session.config.teams.find((t: any) => t.id === teamId);
+    if (team) {
+      team.declaredMembers = size;
+    }
+
+    io.to(`game:${pin}`).emit("pictionary:team-sizes-updated", {
+      teams: session.config.teams
+    });
+  });
+
+  socket.on("pictionary:start-game", ({ pin, words }: { pin: string; words: any[] }) => {
+    const session = pictionarySessions[pin];
+    if (!session) return;
+
+    session.status = "playing";
+    session.wordsPool = words;
+    session.currentWordIndex = 0;
+    session.scores = {};
+    session.config.teams.forEach((t: any) => {
+      session.scores[t.id] = 0;
+    });
+
+    io.to(`game:${pin}`).emit("pictionary:game-started", {
+      status: "playing",
+      scores: session.scores,
+      teams: session.config.teams
+    });
+  });
+
+  socket.on("pictionary:drawing-start", ({ pin, x, y, color, size }: any) => {
+    socket.to(`game:${pin}`).emit("pictionary:drawing-start", { x, y, color, size, senderId: socket.id });
+  });
+
+  socket.on("pictionary:drawing-update", ({ pin, x, y }: any) => {
+    socket.to(`game:${pin}`).emit("pictionary:drawing-update", { x, y, senderId: socket.id });
+  });
+
+  socket.on("pictionary:drawing-clear", ({ pin }: any) => {
+    io.to(`game:${pin}`).emit("pictionary:drawing-clear");
+  });
+
+  socket.on("pictionary:correct", ({ pin, wordResult }: { pin: string; wordResult: any }) => {
+    const session = pictionarySessions[pin];
+    if (!session) return;
+
+    const teamId = wordResult.teamId;
+    const points = wordResult.pointsEarned || 1;
+    session.scores[teamId] = (session.scores[teamId] || 0) + points;
+    session.wordsDetailed.push(wordResult);
+
+    io.to(`game:${pin}`).emit("pictionary:round-outcome", {
+      outcome: "correct",
+      scores: session.scores,
+      wordResult
+    });
+  });
+
+  socket.on("pictionary:skip", ({ pin, wordResult }: { pin: string; wordResult: any }) => {
+    const session = pictionarySessions[pin];
+    if (!session) return;
+
+    session.wordsDetailed.push(wordResult);
+
+    io.to(`game:${pin}`).emit("pictionary:round-outcome", {
+      outcome: "skipped",
+      scores: session.scores,
+      wordResult
+    });
+  });
+
+  socket.on("pictionary:show-hint", ({ pin, hint }: { pin: string; hint: string }) => {
+    io.to(`game:${pin}`).emit("pictionary:hint-shown", { hint });
+  });
+
+  socket.on("pictionary:next-turn", ({ pin, turnState }: { pin: string; turnState: any }) => {
+    const session = pictionarySessions[pin];
+    if (!session) return;
+
+    // Update player drawer statuses
+    Object.values(session.players).forEach((p: any) => {
+      p.isDrawer = (p.name === turnState.drawerName && p.teamId === turnState.teamId);
+    });
+
+    io.to(`game:${pin}`).emit("pictionary:turn-updated", {
+      turnState,
+      players: Object.values(session.players)
+    });
+  });
+
+  socket.on("pictionary:end-game", ({ pin, finalResult }: { pin: string; finalResult: any }) => {
+    const session = pictionarySessions[pin];
+    if (!session) return;
+
+    session.status = "ended";
+    savePictionaryHistory(finalResult);
+
+    io.to(`game:${pin}`).emit("pictionary:game-ended", {
+      finalResult
+    });
+    
+    setTimeout(() => {
+      delete pictionarySessions[pin];
+    }, 10 * 60 * 1000);
+  });
+
+  // ==========================================
+  // HORSE RACE SOCKET.IO ACTIONS (Prepmaster v2.4.0)
+  // ==========================================
+
+  socket.on("horse:create-room", ({ pin, config, bankTitle, questions }: { pin: string; config: any; bankTitle: string; questions: any[] }) => {
+    socket.join(`game:${pin}`);
+    socket.join(`host:${pin}`);
+    
+    horseRaceSessions[pin] = {
+      pin,
+      config,
+      bankTitle,
+      questions,
+      players: {},
+      teams: config.teams || [],
+      turnState: {
+        questionIndex: 0,
+        activeQuestion: null,
+        timer: 0,
+        totalQuestions: questions.length,
+        answeredCount: 0,
+        showAnswers: false,
+      },
+      answersReceived: {}
+    };
+
+    io.to(`game:${pin}`).emit("horse:room-created", {
+      pin,
+      config,
+      teams: config.teams
+    });
+  });
+
+  socket.on("horse:join", ({ pin, name, avatarId, teamId, playerId }: { pin: string; name: string; avatarId?: string; teamId: string; playerId?: string }) => {
+    const session = horseRaceSessions[pin];
+    if (!session) {
+      socket.emit("horse:error", { message: "Sesión de Carrera de Caballos no encontrada" });
+      return;
+    }
+    
+    socket.join(`game:${pin}`);
+    const actualPlayerId = playerId || socket.id;
+    
+    session.players[socket.id] = {
+      id: socket.id,
+      playerId: actualPlayerId,
+      name,
+      avatarId: avatarId || "cult_mariachi",
+      teamId,
+      score: 0,
+      horsePosition: 0,
+    };
+
+    // Update members count per team if it is team mode
+    if (session.config.gameMode !== "all_vs_all") {
+      session.teams = session.teams.map((t: any) => {
+        const count = Object.values(session.players).filter((p: any) => p.teamId === t.id).length;
+        return { ...t, membersCount: count };
+      });
+    }
+
+    socket.emit("horse:join-success", {
+      player: session.players[socket.id],
+      pin,
+      config: session.config,
+      teams: session.teams
+    });
+
+    io.to(`game:${pin}`).emit("horse:player-list", {
+      players: Object.values(session.players),
+      teams: session.teams
+    });
+  });
+
+  socket.on("horse:start-game", ({ pin }: { pin: string }) => {
+    const session = horseRaceSessions[pin];
+    if (!session) return;
+
+    session.turnState.questionIndex = 0;
+    const firstQ = session.questions[0];
+    if (firstQ) {
+      session.turnState.activeQuestion = {
+        text: firstQ.text,
+        options: firstQ.options,
+        difficulty: firstQ.difficulty || "medio",
+      };
+      session.turnState.timer = firstQ.timeLimit || 20;
+    }
+    session.turnState.showAnswers = false;
+    session.turnState.answeredCount = 0;
+    session.answersReceived = {};
+
+    io.to(`game:${pin}`).emit("horse:game-started", {
+      turnState: session.turnState,
+      teams: session.teams,
+      players: Object.values(session.players)
+    });
+  });
+
+  socket.on("horse:submit-answer", ({ pin, optionIndex }: { pin: string; optionIndex: number }) => {
+    const session = horseRaceSessions[pin];
+    if (!session) return;
+    const player = session.players[socket.id];
+    if (!player) return;
+
+    session.answersReceived[player.playerId || socket.id] = optionIndex;
+    session.turnState.answeredCount = Object.keys(session.answersReceived).length;
+
+    io.to(`game:${pin}`).emit("horse:answer-received", {
+      answeredCount: session.turnState.answeredCount,
+      playerId: player.playerId || socket.id
+    });
+  });
+
+  socket.on("horse:powerup", ({ pin, powerUpType, targetTeamId, targetPlayerId }: any) => {
+    const session = horseRaceSessions[pin];
+    if (!session) return;
+
+    io.to(`game:${pin}`).emit("horse:powerup-triggered", {
+      powerUpType,
+      targetTeamId,
+      targetPlayerId,
+      senderSocketId: socket.id
+    });
+  });
+
+  socket.on("horse:advance", ({ pin, teams, players }: { pin: string; teams?: any[]; players?: any[] }) => {
+    const session = horseRaceSessions[pin];
+    if (!session) return;
+
+    if (teams) session.teams = teams;
+    if (players) {
+      players.forEach((p: any) => {
+        const found = Object.values(session.players).find((sp: any) => sp.playerId === p.playerId || sp.id === p.id) as any;
+        if (found) {
+          found.horsePosition = p.horsePosition;
+          found.score = p.score;
+        }
+      });
+    }
+
+    io.to(`game:${pin}`).emit("horse:positions-updated", {
+      teams: session.teams,
+      players: Object.values(session.players)
+    });
+  });
+
+  socket.on("horse:timer-tick", ({ pin, timer }: { pin: string; timer: number }) => {
+    const session = horseRaceSessions[pin];
+    if (!session) return;
+    session.turnState.timer = timer;
+    io.to(`game:${pin}`).emit("horse:timer-updated", { timer });
+  });
+
+  socket.on("horse:show-answers", ({ pin, answers }: { pin: string; answers: any }) => {
+    const session = horseRaceSessions[pin];
+    if (!session) return;
+    session.turnState.showAnswers = true;
+    io.to(`game:${pin}`).emit("horse:answers-shown", { answers });
+  });
+
+  socket.on("horse:next-question", ({ pin }: { pin: string }) => {
+    const session = horseRaceSessions[pin];
+    if (!session) return;
+
+    const nextIndex = session.turnState.questionIndex + 1;
+    if (nextIndex >= session.questions.length) {
+      io.to(`game:${pin}`).emit("horse:game-over-preview");
+      return;
+    }
+
+    session.turnState.questionIndex = nextIndex;
+    const q = session.questions[nextIndex];
+    if (q) {
+      session.turnState.activeQuestion = {
+        text: q.text,
+        options: q.options,
+        difficulty: q.difficulty || "medio",
+      };
+      session.turnState.timer = q.timeLimit || 20;
+    }
+    session.turnState.showAnswers = false;
+    session.turnState.answeredCount = 0;
+    session.answersReceived = {};
+
+    io.to(`game:${pin}`).emit("horse:turn-updated", {
+      turnState: session.turnState,
+      teams: session.teams
+    });
+  });
+
+  socket.on("horse:end-game", ({ pin, finalResult }: { pin: string; finalResult: any }) => {
+    const session = horseRaceSessions[pin];
+    if (!session) return;
+
+    session.status = "ended";
+    saveHorseRaceHistory(finalResult);
+
+    io.to(`game:${pin}`).emit("horse:game-ended", {
+      finalResult
+    });
+
+    setTimeout(() => {
+      delete horseRaceSessions[pin];
+    }, 10 * 60 * 1000);
+  });
+
   // Generic educational game message forwarding
   socket.on("game:host-message", (data: any) => {
     const { pin, event, ...payload } = data;
@@ -2027,6 +3096,70 @@ io.on("connection", (socket: Socket) => {
         });
         return;
       }
+    } else if (event === "exam:register-event" && pin) {
+      const session = activeSessions[pin];
+      if (session) {
+        if (!(session as any).examProgress) {
+          (session as any).examProgress = {};
+        }
+        if (!(session as any).examEvents) {
+          (session as any).examEvents = [];
+        }
+        
+        const studentPlayerId = payload.playerId || payload.socketId || socket.id;
+        const studentName = payload.name || (session.players[socket.id] ? session.players[socket.id].name : "Alumno");
+        const eventType = payload.eventType; // "Cambio de pestaña", "Pérdida de foco", "Recarga o cierre"
+        const description = payload.description || "";
+        const currentQuestionIndex = payload.currentQuestionIndex ?? -1;
+        
+        let reactivoLabel = "N/A";
+        if (currentQuestionIndex !== -1) {
+          reactivoLabel = `Reactivo ${currentQuestionIndex + 1}`;
+        }
+        
+        if (!(session as any).examProgress[studentPlayerId]) {
+          (session as any).examProgress[studentPlayerId] = {
+            playerId: studentPlayerId,
+            socketId: socket.id,
+            name: studentName,
+            solvedCount: 0,
+            correctCount: 0,
+            incorrectCount: 0,
+            percentage: 0,
+            completed: false,
+            timeTakenSeconds: 0,
+            status: "En progreso",
+            answers: {},
+            lastUpdated: Date.now()
+          };
+        }
+        
+        const prog = (session as any).examProgress[studentPlayerId];
+        prog.tabChangeCount = (prog.tabChangeCount || 0) + 1;
+        prog.lastEventName = eventType;
+        prog.lastEventTime = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        prog.examStatus = prog.status || "En progreso";
+        
+        const newEvent = {
+          alumno: studentName,
+          playerId: studentPlayerId,
+          evento: eventType,
+          descripcion: description,
+          fechaHora: new Date().toLocaleDateString('es-MX') + " " + prog.lastEventTime,
+          reactivoActual: reactivoLabel,
+          examStatus: prog.status || "En progreso"
+        };
+        
+        (session as any).examEvents.push(newEvent);
+        
+        // Send to host in real-time
+        io.to(`host:${pin}`).emit("exam:event-registered", {
+          playerId: studentPlayerId,
+          progress: prog,
+          newEvent
+        });
+      }
+      return;
     }
     
     io.to(`host:${pin}`).emit(event, { ...payload, socketId: socket.id });
@@ -2304,6 +3437,46 @@ io.on("connection", (socket: Socket) => {
   socket.on("player:join", ({ pin, name, playerId, avatarId, teamId }: { pin: string; name: string; playerId?: string; avatarId?: string; teamId?: string }) => {
     const session = activeSessions[pin];
     if (!session) {
+      const pictionarySession = pictionarySessions[pin];
+      if (pictionarySession) {
+        socket.emit("player:join-success", {
+          player: {
+            id: socket.id,
+            playerId: playerId || socket.id,
+            name: name,
+            avatarId: avatarId || "cult_mariachi",
+            score: 0,
+            answeredThisQuestion: false,
+            streak: 0,
+          },
+          pin,
+          title: "Pictionary Educativo",
+          gameMode: "teams",
+          gameType: "pictionary",
+          teams: pictionarySession.config.teams
+        });
+        return;
+      }
+      const horseSession = horseRaceSessions[pin];
+      if (horseSession) {
+        socket.emit("player:join-success", {
+          player: {
+            id: socket.id,
+            playerId: playerId || socket.id,
+            name: name,
+            avatarId: avatarId || "cult_mariachi",
+            score: 0,
+            answeredThisQuestion: false,
+            streak: 0,
+          },
+          pin,
+          title: "Carrera de Caballos",
+          gameMode: horseSession.config.gameMode === "all_vs_all" ? "individual" : "teams",
+          gameType: "horse-race",
+          teams: horseSession.teams
+        });
+        return;
+      }
       socket.emit("player:join-error", { message: "La partida con este PIN no existe o se ha cerrado." });
       return;
     }
@@ -2352,8 +3525,53 @@ io.on("connection", (socket: Socket) => {
       let examState: any = null;
       const isExamMode = (session as any).gameType === "exam_mode" || (session as any).examStarted;
       if (isExamMode) {
-        const resolvedPlayerId2 = existingPlayer.playerId || existingPlayer.id;
-        const pProgress = (session as any).examProgress ? (session as any).examProgress[resolvedPlayerId2] : null;
+        const resolvedPlayerId2 = existingPlayer.playerId || existingPlayer.id || "random_player";
+        
+        (session as any).examEvents = (session as any).examEvents || [];
+        (session as any).examProgress = (session as any).examProgress || {};
+        
+        if (!(session as any).examProgress[resolvedPlayerId2]) {
+          (session as any).examProgress[resolvedPlayerId2] = {
+            playerId: resolvedPlayerId2,
+            socketId: socket.id,
+            name: existingPlayer.name,
+            solvedCount: 0,
+            correctCount: 0,
+            incorrectCount: 0,
+            percentage: 0,
+            completed: false,
+            timeTakenSeconds: 0,
+            status: "En progreso",
+            answers: {},
+            lastUpdated: Date.now()
+          };
+        }
+        
+        const prog = (session as any).examProgress[resolvedPlayerId2];
+        prog.reconnectCount = (prog.reconnectCount || 0) + 1;
+        prog.lastEventName = "Reconexión";
+        prog.lastEventTime = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        prog.examStatus = prog.status || "En progreso";
+        
+        const newEvent = {
+          alumno: existingPlayer.name,
+          playerId: resolvedPlayerId2,
+          evento: "Reconexión",
+          descripcion: "El alumno volvió a conectarse al servidor tras una desconexión o recarga.",
+          fechaHora: new Date().toLocaleDateString('es-MX') + " " + prog.lastEventTime,
+          reactivoActual: "N/A",
+          examStatus: prog.status || "En progreso"
+        };
+        
+        (session as any).examEvents.push(newEvent);
+        
+        io.to(`host:${pin}`).emit("exam:event-registered", {
+          playerId: resolvedPlayerId2,
+          progress: prog,
+          newEvent
+        });
+
+        const pProgress = (session as any).examProgress[resolvedPlayerId2];
         if (pProgress) {
           existingPlayer.score = pProgress.percentage || 0;
           existingPlayer.answeredThisQuestion = pProgress.completed || false;
@@ -2599,8 +3817,717 @@ io.on("connection", (socket: Socket) => {
     }
   });
 
+  // ==========================================
+  // HEADBANZ SOCKET.IO ACTIONS (Prepmaster 2.5.0)
+  // ==========================================
+
+  socket.on("headbanz:create-room", ({ pin, config, bankName, words }) => {
+    socket.join(`game:${pin}`);
+    socket.join(`host:${pin}`);
+    
+    headbanzSessions[pin] = {
+      pin,
+      bankName,
+      config,
+      words: words || [],
+      players: {},
+      currentPlayerIndex: -1,
+      currentRound: 1,
+      timer: config.timePerTurn || 60,
+      status: "lobby",
+      conceptsLog: []
+    };
+
+    emitHeadbanzState(pin);
+  });
+
+  socket.on("headbanz:join", ({ pin, name, avatarId, teamId, playerId }) => {
+    socket.join(`game:${pin}`);
+    const session = headbanzSessions[pin];
+    if (!session) {
+      socket.emit("headbanz:error", { message: "La sala no existe." });
+      return;
+    }
+
+    session.players[socket.id] = {
+      id: socket.id,
+      playerId: playerId || socket.id,
+      name,
+      avatarId: avatarId || "cult_mariachi",
+      teamId: teamId || "",
+      score: 0,
+      isReady: true,
+      currentWord: undefined,
+      currentCategory: undefined,
+      currentHint: undefined,
+      hintShown: false
+    };
+
+    emitHeadbanzState(pin);
+  });
+
+  socket.on("headbanz:start", ({ pin }) => {
+    const session = headbanzSessions[pin];
+    if (!session) return;
+
+    session.status = "playing";
+    session.currentRound = 1;
+    session.currentPlayerIndex = 0;
+    
+    assignHeadbanzWords(session);
+    startHeadbanzTimer(pin);
+    emitHeadbanzState(pin);
+  });
+
+  socket.on("headbanz:hint", ({ pin }) => {
+    const session = headbanzSessions[pin];
+    if (!session) return;
+
+    const playersList = Object.values(session.players);
+    if (session.currentPlayerIndex >= 0 && session.currentPlayerIndex < playersList.length) {
+      const activePlayer = playersList[session.currentPlayerIndex] as any;
+      if (activePlayer) {
+        activePlayer.hintShown = true;
+        io.to(`game:${pin}`).emit("headbanz:sound", { type: "hint" });
+        emitHeadbanzState(pin);
+      }
+    }
+  });
+
+  socket.on("headbanz:correct", ({ pin }) => {
+    const session = headbanzSessions[pin];
+    if (!session) return;
+
+    const playersList = Object.values(session.players);
+    if (session.currentPlayerIndex >= 0 && session.currentPlayerIndex < playersList.length) {
+      const activePlayer = playersList[session.currentPlayerIndex] as any;
+      if (activePlayer && activePlayer.currentWord) {
+        let points = session.config.pointsPerCorrect || 1;
+        const wordObj = session.words.find((w: any) => w.concept === activePlayer.currentWord);
+        const difficulty = wordObj ? wordObj.difficulty : "medio";
+        if (difficulty === "facil") points = 1;
+        else if (difficulty === "medio") points = 2;
+        else if (difficulty === "dificil") points = 3;
+
+        activePlayer.score += points;
+        
+        session.conceptsLog.push({
+          player: activePlayer.name,
+          teamId: activePlayer.teamId,
+          concept: activePlayer.currentWord,
+          difficulty,
+          result: "correcto",
+          points,
+          timeTaken: session.config.timePerTurn - session.timer
+        });
+
+        io.to(`game:${pin}`).emit("headbanz:sound", { type: "correct" });
+
+        const availableWords = session.words.filter((w: any) => 
+          !Object.values(session.players).some((p: any) => p.currentWord === w.concept)
+        );
+        if (availableWords.length > 0) {
+          const newWord = availableWords[Math.floor(Math.random() * availableWords.length)];
+          activePlayer.currentWord = newWord.concept;
+          activePlayer.currentCategory = newWord.category;
+          activePlayer.currentHint = newWord.hint;
+          activePlayer.hintShown = false;
+        } else {
+          advanceToNextPlayer(pin);
+          return;
+        }
+
+        emitHeadbanzState(pin);
+      }
+    }
+  });
+
+  socket.on("headbanz:skip", ({ pin }) => {
+    const session = headbanzSessions[pin];
+    if (!session) return;
+
+    const playersList = Object.values(session.players);
+    if (session.currentPlayerIndex >= 0 && session.currentPlayerIndex < playersList.length) {
+      const activePlayer = playersList[session.currentPlayerIndex] as any;
+      if (activePlayer && activePlayer.currentWord) {
+        const wordObj = session.words.find((w: any) => w.concept === activePlayer.currentWord);
+        const difficulty = wordObj ? wordObj.difficulty : "medio";
+
+        session.conceptsLog.push({
+          player: activePlayer.name,
+          teamId: activePlayer.teamId,
+          concept: activePlayer.currentWord,
+          difficulty,
+          result: "saltado",
+          points: 0,
+          timeTaken: session.config.timePerTurn - session.timer
+        });
+
+        io.to(`game:${pin}`).emit("headbanz:sound", { type: "incorrect" });
+
+        const availableWords = session.words.filter((w: any) => 
+          !Object.values(session.players).some((p: any) => p.currentWord === w.concept)
+        );
+        if (availableWords.length > 0) {
+          const newWord = availableWords[Math.floor(Math.random() * availableWords.length)];
+          activePlayer.currentWord = newWord.concept;
+          activePlayer.currentCategory = newWord.category;
+          activePlayer.currentHint = newWord.hint;
+          activePlayer.hintShown = false;
+        } else {
+          advanceToNextPlayer(pin);
+          return;
+        }
+
+        emitHeadbanzState(pin);
+      }
+    }
+  });
+
+  socket.on("headbanz:end", ({ pin }) => {
+    const session = headbanzSessions[pin];
+    if (!session) return;
+
+    endHeadbanzGame(pin);
+  });
+
+  socket.on("headbanz:feedback", ({ pin, feedback }: { pin: string; feedback: "yes" | "no" | "maybe" | "close" }) => {
+    io.to(`game:${pin}`).emit("headbanz:feedback-received", { feedback, senderId: socket.id });
+  });
+
+  // ==========================================
+  // UNIVERSAL BUZZER SOCKET.IO ACTIONS (Prepmaster 2.6.0)
+  // ==========================================
+
+  socket.on("buzzer:start", ({ pin, gameMode }: { pin: string; gameMode: string }) => {
+    buzzerSessions[pin] = {
+      pin,
+      startTime: Date.now(),
+      isOpen: true,
+      presses: [],
+      pressedPlayers: new Set<string>()
+    };
+    io.to(`game:${pin}`).emit("buzzer:started", { pin, gameMode });
+    io.to(`host:${pin}`).emit("buzzer:started", { pin, gameMode });
+    io.to(`game:${pin}`).emit("buzzer:sound", { type: "start" });
+    io.to(`host:${pin}`).emit("buzzer:sound", { type: "start" });
+  });
+
+  socket.on("buzzer:press", ({ pin, playerId, playerName, teamId, teamName, gameMode }) => {
+    const session = buzzerSessions[pin];
+    if (!session || !session.isOpen) return;
+
+    if (session.pressedPlayers.has(playerId)) return;
+    session.pressedPlayers.add(playerId);
+
+    const now = Date.now();
+    const reactionTime = (now - session.startTime) / 1000;
+    const position = session.presses.length + 1;
+
+    const press: ServerBuzzerPress = {
+      playerId,
+      playerName,
+      teamId: teamId || null,
+      teamName: teamName || null,
+      gameMode,
+      timestamp: now,
+      position,
+      reactionTime
+    };
+
+    session.presses.push(press);
+
+    // Save to SQLite buzzer_history
+    try {
+      const uuid = Math.random().toString(36).substring(2) + Date.now();
+      const insert = db.prepare(`
+        INSERT INTO buzzer_history (id, playerId, playerName, teamId, teamName, gameMode, timestamp, position, reactionTime, date)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      insert.run(
+        uuid,
+        playerId,
+        playerName,
+        teamId || null,
+        teamName || null,
+        gameMode,
+        now,
+        position,
+        reactionTime,
+        new Date().toISOString()
+      );
+    } catch (e) {
+      console.error("Error saving buzzer to SQLite:", e);
+    }
+
+    io.to(`host:${pin}`).emit("buzzer:results", { pin, presses: session.presses });
+    socket.emit("buzzer:pressed-ack", { position, reactionTime });
+
+    if (position === 1) {
+      io.to(`host:${pin}`).emit("buzzer:sound", { type: "victory" });
+      io.to(`game:${pin}`).emit("buzzer:sound", { type: "victory" });
+    }
+  });
+
+  socket.on("buzzer:close", ({ pin }: { pin: string }) => {
+    const session = buzzerSessions[pin];
+    if (session) {
+      session.isOpen = false;
+    }
+    io.to(`game:${pin}`).emit("buzzer:closed", { pin });
+    io.to(`host:${pin}`).emit("buzzer:closed", { pin });
+    io.to(`game:${pin}`).emit("buzzer:sound", { type: "close" });
+    io.to(`host:${pin}`).emit("buzzer:sound", { type: "close" });
+  });
+
+  socket.on("buzzer:reset", ({ pin }: { pin: string }) => {
+    if (buzzerSessions[pin]) {
+      delete buzzerSessions[pin];
+    }
+    io.to(`game:${pin}`).emit("buzzer:resetted", { pin });
+    io.to(`host:${pin}`).emit("buzzer:resetted", { pin });
+  });
+
+  // ==========================================
+  // CONECTA 4 EDUCATIVO SOCKET.IO ACTIONS (Prepmaster 2.5.0)
+  // ==========================================
+
+  socket.on("c4:create-room", ({ pin, config, questions }) => {
+    socket.join(`game:${pin}`);
+    socket.join(`host:${pin}`);
+    conecta4Sessions[pin] = {
+      pin,
+      config,
+      board: Array(6).fill(null).map(() => Array(7).fill(null)),
+      blockedColumns: {},
+      powers: {
+        red: { shield: 1, double: 1, swap: 1 },
+        blue: { shield: 1, double: 1, swap: 1 }
+      },
+      whosTurn: null,
+      status: "lobby",
+      currentQuestionIndex: 0,
+      timer: config.timeLimit || 20,
+      scores: { red: 0, blue: 0 },
+      answersReceived: {},
+      players: {},
+      lastMove: null,
+      winnerLine: null,
+      history: [],
+      questionsLog: [],
+      doubleTokenActive: false,
+      gameWinner: null,
+      questions: questions || []
+    };
+    emitConecta4State(pin);
+  });
+
+  socket.on("c4:join", ({ pin, name, avatarId, teamId, playerId }) => {
+    socket.join(`game:${pin}`);
+    const session = conecta4Sessions[pin];
+    if (!session) {
+      socket.emit("c4:error", { message: "La sala de Conecta 4 no existe." });
+      return;
+    }
+    const finalPlayerId = playerId || socket.id;
+
+    // Decide team dynamically for duel if not specified
+    let assignedTeam = teamId;
+    if (session.config.gameMode === "duel") {
+      const activePlayers = Object.values(session.players);
+      const bluePlayers = activePlayers.filter((p: any) => p.teamId === "blue");
+      const redPlayers = activePlayers.filter((p: any) => p.teamId === "red");
+      if (bluePlayers.length <= redPlayers.length) {
+        assignedTeam = "blue";
+      } else {
+        assignedTeam = "red";
+      }
+    } else if (session.config.gameMode === "prof_vs_aula") {
+      assignedTeam = "blue"; // Students are Blue (Aula)
+    }
+
+    session.players[socket.id] = {
+      id: socket.id,
+      playerId: finalPlayerId,
+      name,
+      avatarId: avatarId || "cult_mariachi",
+      teamId: assignedTeam || "blue",
+      score: 0,
+      streak: 0,
+      answeredThisQuestion: false,
+      lastAnswerIndex: -1,
+      lastAnswerTime: 0,
+      isLastCorrect: false,
+      pointsEarned: 0
+    };
+
+    emitConecta4State(pin);
+  });
+
+  socket.on("c4:start-game", ({ pin }) => {
+    const session = conecta4Sessions[pin];
+    if (!session) return;
+    session.status = "question";
+    session.currentQuestionIndex = 0;
+    const question = session.questions[0];
+    session.timer = question ? question.timeLimit : session.config.timeLimit;
+    session.answersReceived = {};
+    Object.values(session.players).forEach((p: any) => {
+      p.answeredThisQuestion = false;
+      p.lastAnswerIndex = -1;
+    });
+    emitConecta4State(pin);
+    io.to(`game:${pin}`).emit("c4:sound", { type: "start_turn" });
+  });
+
+  socket.on("c4:submit-answer", ({ pin, optionIndex, timeTaken }) => {
+    const session = conecta4Sessions[pin];
+    if (!session) return;
+    const player = session.players[socket.id];
+    if (!player) return;
+
+    const question = session.questions[session.currentQuestionIndex];
+    const isCorrect = question ? optionIndex === question.correctOption : false;
+
+    player.answeredThisQuestion = true;
+    player.lastAnswerIndex = optionIndex;
+    player.lastAnswerTime = timeTaken;
+    player.isLastCorrect = isCorrect;
+
+    session.answersReceived[player.playerId || socket.id] = {
+      optionIndex,
+      timeTaken,
+      isCorrect
+    };
+
+    emitConecta4State(pin);
+  });
+
+  socket.on("c4:timer-tick", ({ pin, timer }) => {
+    const session = conecta4Sessions[pin];
+    if (!session) return;
+    session.timer = timer;
+    if (timer <= 3 && timer > 0) {
+      io.to(`game:${pin}`).emit("c4:sound", { type: "countdown" });
+    }
+    emitConecta4State(pin);
+  });
+
+  socket.on("c4:show-answers", ({ pin }) => {
+    const session = conecta4Sessions[pin];
+    if (!session) return;
+    session.status = "reveal";
+    
+    // Determine winner of the turn
+    const question = session.questions[session.currentQuestionIndex];
+    let turnWinner: "red" | "blue" | null = null;
+    
+    const playersArr = Object.values(session.players) as any[];
+    
+    const blueAnswers = playersArr.filter(p => p.teamId === "blue");
+    const redAnswers = playersArr.filter(p => p.teamId === "red");
+
+    const correctBlue = blueAnswers.filter(p => p.isLastCorrect && p.answeredThisQuestion);
+    const correctRed = redAnswers.filter(p => p.isLastCorrect && p.answeredThisQuestion);
+
+    const precisionBlue = blueAnswers.length > 0 ? (correctBlue.length / blueAnswers.length) * 100 : 0;
+    const precisionRed = redAnswers.length > 0 ? (correctRed.length / redAnswers.length) * 100 : 0;
+
+    if (session.config.gameMode === "duel") {
+      // Direct comparison
+      const bluePlayer = blueAnswers[0];
+      const redPlayer = redAnswers[0];
+
+      const blueCorrect = bluePlayer && bluePlayer.isLastCorrect && bluePlayer.answeredThisQuestion;
+      const redCorrect = redPlayer && redPlayer.isLastCorrect && redPlayer.answeredThisQuestion;
+
+      if (blueCorrect && !redCorrect) {
+        turnWinner = "blue";
+      } else if (!blueCorrect && redCorrect) {
+        turnWinner = "red";
+      } else if (blueCorrect && redCorrect) {
+        // Both correct, who was faster?
+        if (bluePlayer.lastAnswerTime <= redPlayer.lastAnswerTime) {
+          turnWinner = "blue";
+        } else {
+          turnWinner = "red";
+        }
+      }
+    } else if (session.config.gameMode === "teams") {
+      // Team average precision comparison
+      if (precisionBlue > precisionRed) {
+        turnWinner = "blue";
+      } else if (precisionRed > precisionBlue) {
+        turnWinner = "red";
+      } else if (precisionBlue === precisionRed && precisionBlue > 0) {
+        // Tie in precision, break tie with average response time of correct responders
+        const avgTimeBlue = correctBlue.reduce((sum, p) => sum + p.lastAnswerTime, 0) / (correctBlue.length || 1);
+        const avgTimeRed = correctRed.reduce((sum, p) => sum + p.lastAnswerTime, 0) / (correctRed.length || 1);
+        if (avgTimeBlue <= avgTimeRed) {
+          turnWinner = "blue";
+        } else {
+          turnWinner = "red";
+        }
+      }
+    } else if (session.config.gameMode === "prof_vs_aula") {
+      // Aula vs Profesor
+      // Aula wins turn if their accuracy >= 50% (or at least 1 correct if low count)
+      const threshold = 50;
+      if (blueAnswers.length === 0) {
+        turnWinner = "red";
+      } else if (precisionBlue >= threshold) {
+        turnWinner = "blue";
+      } else {
+        turnWinner = "red";
+      }
+    }
+
+    session.whosTurn = turnWinner;
+
+    // Log the question
+    if (question) {
+      const winnerName = turnWinner === "blue" ? (session.config.gameMode === "prof_vs_aula" ? "Aula" : "Azul") : turnWinner === "red" ? (session.config.gameMode === "prof_vs_aula" ? "Profesor" : "Rojo") : "Nadie";
+      session.questionsLog.push({
+        question: question.text,
+        correctOptionText: question.options[question.correctOption] || "",
+        winner: winnerName,
+        precisionBlue: Math.round(precisionBlue),
+        precisionRed: Math.round(precisionRed)
+      });
+    }
+
+    if (turnWinner) {
+      session.status = "drop";
+      io.to(`game:${pin}`).emit("c4:sound", { type: "correct" });
+    } else {
+      // No turn winner, wait 4 seconds then advance to next question
+      setTimeout(() => {
+        const s = conecta4Sessions[pin];
+        if (s && s.status === "reveal") {
+          advanceToNextQuestion(pin);
+        }
+      }, 4000);
+      io.to(`game:${pin}`).emit("c4:sound", { type: "incorrect" });
+    }
+
+    emitConecta4State(pin);
+  });
+
+  socket.on("c4:next-question", ({ pin }) => {
+    advanceToNextQuestion(pin);
+  });
+
+  socket.on("c4:drop-token", ({ pin, col }) => {
+    const session = conecta4Sessions[pin];
+    if (!session) return;
+    if (session.status !== "drop") return;
+    if (!session.whosTurn) return;
+
+    // Check if column is blocked
+    if (session.blockedColumns[col] > 0) {
+      socket.emit("c4:error", { message: "Esta columna está bloqueada este turno." });
+      return;
+    }
+
+    // Find available row (drop to bottom)
+    let targetRow = -1;
+    for (let r = 5; r >= 0; r--) {
+      if (session.board[r][col] === null) {
+        targetRow = r;
+        break;
+      }
+    }
+
+    if (targetRow === -1) {
+      socket.emit("c4:error", { message: "Esta columna está llena." });
+      return;
+    }
+
+    const playerColor = session.whosTurn;
+    session.board[targetRow][col] = playerColor;
+    session.lastMove = { row: targetRow, col, player: playerColor };
+
+    // Register movement in history
+    const playerLabel = playerColor === "blue" ? (session.config.gameMode === "prof_vs_aula" ? "Aula 🔵" : "Azul 🔵") : (session.config.gameMode === "prof_vs_aula" ? "Profesor 🔴" : "Rojo 🔴");
+    const nowTime = new Date().toLocaleTimeString("es-MX", { hour12: false });
+    session.history.push({
+      turn: session.history.length + 1,
+      player: playerLabel,
+      column: col,
+      row: targetRow,
+      time: nowTime
+    });
+
+    io.to(`game:${pin}`).emit("c4:sound", { type: "drop" });
+
+    // Decrement blocked columns
+    Object.keys(session.blockedColumns).forEach((k) => {
+      const c = Number(k);
+      if (session.blockedColumns[c] > 0) {
+        session.blockedColumns[c]--;
+      }
+    });
+
+    // Check win condition
+    const winCheck = checkConnect4Win(session.board);
+    if (winCheck.winner) {
+      session.winnerLine = winCheck.line;
+      session.scores[winCheck.winner]++;
+      session.status = "ended";
+      session.gameWinner = winCheck.winner;
+      io.to(`game:${pin}`).emit("c4:sound", { type: "line" });
+      setTimeout(() => {
+        io.to(`game:${pin}`).emit("c4:sound", { type: "victory" });
+      }, 1000);
+      saveConecta4HistoryToDB(session);
+    } else {
+      // Check board full (draw)
+      const isFull = session.board[0].every((cell: any) => cell !== null);
+      if (isFull) {
+        session.status = "ended";
+        session.gameWinner = null;
+        saveConecta4HistoryToDB(session);
+      } else {
+        if (session.doubleTokenActive) {
+          session.doubleTokenActive = false;
+        } else {
+          advanceToNextQuestion(pin);
+        }
+      }
+    }
+
+    emitConecta4State(pin);
+  });
+
+  socket.on("c4:use-power", ({ pin, team, power, column, fromCol, fromRow, toCol }) => {
+    const session = conecta4Sessions[pin];
+    if (!session) return;
+    if (!session.config.specialPowersEnabled) return;
+
+    if (power === "shield") {
+      if (session.powers[team].shield > 0 && typeof column === "number") {
+        session.powers[team].shield--;
+        session.blockedColumns[column] = 2; // block for next turn
+        io.to(`game:${pin}`).emit("c4:sound", { type: "countdown" });
+      }
+    } else if (power === "double") {
+      if (session.powers[team].double > 0) {
+        session.powers[team].double--;
+        session.doubleTokenActive = true;
+        io.to(`game:${pin}`).emit("c4:sound", { type: "countdown" });
+      }
+    } else if (power === "swap") {
+      if (session.powers[team].swap > 0 && typeof fromCol === "number" && typeof fromRow === "number" && typeof toCol === "number") {
+        if (session.board[fromRow][fromCol] === team) {
+          session.powers[team].swap--;
+          session.board[fromRow][fromCol] = null;
+          
+          for (let r = fromRow; r > 0; r--) {
+            session.board[r][fromCol] = session.board[r - 1][fromCol];
+          }
+          session.board[0][fromCol] = null;
+
+          let targetRow = -1;
+          for (let r = 5; r >= 0; r--) {
+            if (session.board[r][toCol] === null) {
+              targetRow = r;
+              break;
+            }
+          }
+          if (targetRow !== -1) {
+            session.board[targetRow][toCol] = team;
+            session.lastMove = { row: targetRow, col: toCol, player: team };
+            io.to(`game:${pin}`).emit("c4:sound", { type: "drop" });
+          }
+
+          const winCheck = checkConnect4Win(session.board);
+          if (winCheck.winner) {
+            session.winnerLine = winCheck.line;
+            session.scores[winCheck.winner]++;
+            session.status = "ended";
+            session.gameWinner = winCheck.winner;
+            io.to(`game:${pin}`).emit("c4:sound", { type: "line" });
+            setTimeout(() => {
+              io.to(`game:${pin}`).emit("c4:sound", { type: "victory" });
+            }, 1000);
+            saveConecta4HistoryToDB(session);
+          }
+        }
+      }
+    }
+    emitConecta4State(pin);
+  });
+
+  socket.on("c4:reset-board", ({ pin }) => {
+    const session = conecta4Sessions[pin];
+    if (!session) return;
+    session.board = Array(6).fill(null).map(() => Array(7).fill(null));
+    session.blockedColumns = {};
+    session.winnerLine = null;
+    session.lastMove = null;
+    session.doubleTokenActive = false;
+    session.gameWinner = null;
+    session.status = "question";
+    
+    session.powers = {
+      red: { shield: 1, double: 1, swap: 1 },
+      blue: { shield: 1, double: 1, swap: 1 }
+    };
+
+    advanceToNextQuestion(pin);
+    emitConecta4State(pin);
+  });
+
+  socket.on("c4:end-game", ({ pin }) => {
+    const session = conecta4Sessions[pin];
+    if (!session) return;
+    session.status = "ended";
+    emitConecta4State(pin);
+  });
+
   // CLEANUP ON DISCONNECT
   socket.on("disconnect", () => {
+    // Clean up Conecta 4 players
+    Object.keys(conecta4Sessions).forEach((pin) => {
+      const session = conecta4Sessions[pin];
+      if (session && session.players[socket.id]) {
+        delete session.players[socket.id];
+        emitConecta4State(pin);
+      }
+    });
+
+    // Clean up Pictionary players
+    Object.keys(pictionarySessions).forEach((pin) => {
+      const session = pictionarySessions[pin];
+      if (session && session.players[socket.id]) {
+        delete session.players[socket.id];
+        io.to(`game:${pin}`).emit("pictionary:player-list", {
+          players: Object.values(session.players)
+        });
+      }
+    });
+
+    // Clean up Horse Race players
+    Object.keys(horseRaceSessions).forEach((pin) => {
+      const session = horseRaceSessions[pin];
+      if (session && session.players[socket.id]) {
+        delete session.players[socket.id];
+        io.to(`game:${pin}`).emit("horse:player-list", {
+          players: Object.values(session.players),
+          teams: session.teams
+        });
+      }
+    });
+
+    // Clean up Headbanz players
+    Object.keys(headbanzSessions).forEach((pin) => {
+      const session = headbanzSessions[pin];
+      if (session && session.players[socket.id]) {
+        delete session.players[socket.id];
+        emitHeadbanzState(pin);
+      }
+    });
+
     // Find player in sessions and notify hosts
     Object.keys(activeSessions).forEach((pin) => {
       const session = activeSessions[pin];
@@ -2621,11 +4548,312 @@ io.on("connection", (socket: Socket) => {
         } else {
           // Flag them or let host know
           io.to(`host:${pin}`).emit("player:disconnected", { id: socket.id });
+
+          const isExamMode = (session as any).gameType === "exam_mode" || (session as any).examStarted;
+          if (isExamMode) {
+            const playerObj = session.players[socket.id];
+            if (playerObj) {
+              const studentPlayerId = playerObj.playerId || playerObj.id || socket.id;
+              
+              (session as any).examEvents = (session as any).examEvents || [];
+              (session as any).examProgress = (session as any).examProgress || {};
+              
+              if (!(session as any).examProgress[studentPlayerId]) {
+                (session as any).examProgress[studentPlayerId] = {
+                  playerId: studentPlayerId,
+                  socketId: socket.id,
+                  name: playerObj.name,
+                  solvedCount: 0,
+                  correctCount: 0,
+                  incorrectCount: 0,
+                  percentage: 0,
+                  completed: false,
+                  timeTakenSeconds: 0,
+                  status: "En progreso",
+                  answers: {},
+                  lastUpdated: Date.now()
+                };
+              }
+              
+              const prog = (session as any).examProgress[studentPlayerId];
+              prog.disconnectCount = (prog.disconnectCount || 0) + 1;
+              prog.lastEventName = "Desconexión";
+              prog.lastEventTime = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+              prog.examStatus = prog.status || "En progreso";
+              
+              const newEvent = {
+                alumno: playerObj.name,
+                playerId: studentPlayerId,
+                evento: "Desconexión",
+                descripcion: "El alumno perdió conexión o cerró el navegador.",
+                fechaHora: new Date().toLocaleDateString('es-MX') + " " + prog.lastEventTime,
+                reactivoActual: "N/A",
+                examStatus: prog.status || "En progreso"
+              };
+              
+              (session as any).examEvents.push(newEvent);
+              
+              // Broadcast to Host
+              io.to(`host:${pin}`).emit("exam:event-registered", {
+                playerId: studentPlayerId,
+                progress: prog,
+                newEvent
+              });
+            }
+          }
         }
       }
     });
   });
 });
+
+// ==========================================
+// HEADBANZ CORE LOGIC HELPERS (Prepmaster 2.5.0)
+// ==========================================
+
+function assignHeadbanzWords(session: any) {
+  const words = [...session.words];
+  if (words.length === 0) return;
+
+  Object.values(session.players).forEach((player: any) => {
+    const randomIndex = Math.floor(Math.random() * words.length);
+    const w = words[randomIndex] || words[0];
+    player.currentWord = w.concept;
+    player.currentCategory = w.category;
+    player.currentHint = w.hint;
+    player.hintShown = false;
+  });
+}
+
+function startHeadbanzTimer(pin: string) {
+  clearRoomInterval(pin);
+  const session = headbanzSessions[pin];
+  if (!session) return;
+
+  session.timer = session.config.timePerTurn || 60;
+  io.to(`game:${pin}`).emit("headbanz:sound", { type: "start_turn" });
+
+  timerIntervals[pin] = setInterval(() => {
+    const s = headbanzSessions[pin];
+    if (!s) {
+      clearRoomInterval(pin);
+      return;
+    }
+
+    if (s.status !== "playing") {
+      clearRoomInterval(pin);
+      return;
+    }
+
+    s.timer--;
+
+    // Automatic Hint at 50% time
+    if (s.config.showHints && s.timer === Math.floor((s.config.timePerTurn || 60) / 2)) {
+      const playersList = Object.values(s.players);
+      if (s.currentPlayerIndex >= 0 && s.currentPlayerIndex < playersList.length) {
+        const activePlayer = playersList[s.currentPlayerIndex] as any;
+        if (activePlayer && !activePlayer.hintShown) {
+          activePlayer.hintShown = true;
+          io.to(`game:${pin}`).emit("headbanz:sound", { type: "hint" });
+        }
+      }
+    }
+
+    if (s.timer <= 0) {
+      clearRoomInterval(pin);
+      io.to(`game:${pin}`).emit("headbanz:sound", { type: "end_round" });
+      
+      // Auto-log active word as timeout
+      const playersList = Object.values(s.players);
+      if (s.currentPlayerIndex >= 0 && s.currentPlayerIndex < playersList.length) {
+        const activePlayer = playersList[s.currentPlayerIndex] as any;
+        if (activePlayer && activePlayer.currentWord) {
+          const wordObj = s.words.find((w: any) => w.concept === activePlayer.currentWord);
+          s.conceptsLog.push({
+            player: activePlayer.name,
+            teamId: activePlayer.teamId,
+            concept: activePlayer.currentWord,
+            difficulty: wordObj ? wordObj.difficulty : "medio",
+            result: "tiempo",
+            points: 0,
+            timeTaken: s.config.timePerTurn
+          });
+        }
+      }
+
+      advanceToNextPlayer(pin);
+    } else {
+      emitHeadbanzState(pin);
+    }
+  }, 1000);
+}
+
+function advanceToNextPlayer(pin: string) {
+  const session = headbanzSessions[pin];
+  if (!session) return;
+
+  const playersList = Object.values(session.players);
+  if (playersList.length === 0) {
+    endHeadbanzGame(pin);
+    return;
+  }
+
+  session.currentPlayerIndex++;
+  if (session.currentPlayerIndex >= playersList.length) {
+    session.currentPlayerIndex = 0;
+    session.currentRound++;
+  }
+
+  if (session.currentRound > (session.config.roundsCount || 3)) {
+    endHeadbanzGame(pin);
+  } else {
+    const nextPlayer = playersList[session.currentPlayerIndex] as any;
+    if (nextPlayer) {
+      const availableWords = session.words.filter((w: any) => 
+        !Object.values(session.players).some((p: any) => p.currentWord === w.concept)
+      );
+      const w = availableWords.length > 0 
+        ? availableWords[Math.floor(Math.random() * availableWords.length)]
+        : session.words[Math.floor(Math.random() * session.words.length)];
+      if (w) {
+        nextPlayer.currentWord = w.concept;
+        nextPlayer.currentCategory = w.category;
+        nextPlayer.currentHint = w.hint;
+        nextPlayer.hintShown = false;
+      }
+    }
+    
+    startHeadbanzTimer(pin);
+    emitHeadbanzState(pin);
+  }
+}
+
+function endHeadbanzGame(pin: string) {
+  clearRoomInterval(pin);
+  const session = headbanzSessions[pin];
+  if (!session) return;
+
+  session.status = "ended";
+  session.timer = 0;
+
+  // Save to history SQLite
+  saveHeadbanzHistory({
+    date: new Date().toISOString(),
+    bankName: session.bankName,
+    config: session.config,
+    playerScores: Object.values(session.players).map((p: any) => ({
+      name: p.name,
+      teamId: p.teamId,
+      score: p.score
+    })),
+    conceptsLog: session.conceptsLog
+  });
+
+  emitHeadbanzState(pin);
+}
+
+function emitHeadbanzState(pin: string) {
+  const session = headbanzSessions[pin];
+  if (!session) return;
+
+  // Send full state to host
+  io.to(`host:${pin}`).emit("headbanz:state", session);
+
+  // Send state to each player, hiding their own active word & hint
+  const playerSockets = Object.keys(session.players);
+  playerSockets.forEach((socketId) => {
+    const playerSpecificSession = JSON.parse(JSON.stringify(session));
+    const currentPlayer = playerSpecificSession.players[socketId];
+    if (currentPlayer) {
+      currentPlayer.currentWord = undefined;
+      currentPlayer.currentHint = undefined;
+    }
+    io.to(socketId).emit("headbanz:state", playerSpecificSession);
+  });
+}
+
+// ==========================================
+// CONECTA 4 CORE HELPERS
+// ==========================================
+
+function checkConnect4Win(board: (string | null)[][]): { winner: "red" | "blue" | null; line: [number, number][] | null } {
+  const rows = 6;
+  const cols = 7;
+  const directions = [
+    { r: 0, c: 1 },  // horizontal
+    { r: 1, c: 0 },  // vertical
+    { r: 1, c: 1 },  // diagonal down-right
+    { r: 1, c: -1 } // diagonal up-right
+  ];
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const color = board[r][c];
+      if (!color) continue;
+
+      for (const { r: dr, c: dc } of directions) {
+        const line: [number, number][] = [[r, c]];
+        let nr = r + dr;
+        let nc = c + dc;
+        
+        while (nr >= 0 && nr < rows && nc >= 0 && nc < cols && board[nr][nc] === color) {
+          line.push([nr, nc]);
+          if (line.length === 4) {
+            return { winner: color as "red" | "blue", line };
+          }
+          nr += dr;
+          nc += dc;
+        }
+      }
+    }
+  }
+  return { winner: null, line: null };
+}
+
+function advanceToNextQuestion(pin: string) {
+  const session = conecta4Sessions[pin];
+  if (!session) return;
+  
+  session.currentQuestionIndex++;
+  if (session.currentQuestionIndex >= session.questions.length) {
+    session.currentQuestionIndex = 0;
+  }
+  
+  const question = session.questions[session.currentQuestionIndex];
+  session.timer = question ? question.timeLimit : session.config.timeLimit;
+  session.status = "question";
+  session.answersReceived = {};
+  session.whosTurn = null;
+  session.doubleTokenActive = false;
+  
+  Object.values(session.players).forEach((p: any) => {
+    p.answeredThisQuestion = false;
+    p.lastAnswerIndex = -1;
+  });
+
+  io.to(`game:${pin}`).emit("c4:sound", { type: "start_turn" });
+}
+
+function saveConecta4HistoryToDB(session: any) {
+  try {
+    saveHeadbanzHistory({
+      id: Math.random().toString(36).substring(2, 11),
+      date: new Date().toISOString(),
+      bankName: session.questionsLog[0]?.question || "Conecta 4",
+      config: session.config,
+      playerScores: session.scores,
+      conceptsLog: session.history
+    });
+  } catch (err) {
+    console.error("Error logging Conecta 4 History:", err);
+  }
+}
+
+function emitConecta4State(pin: string) {
+  const session = conecta4Sessions[pin];
+  if (!session) return;
+  io.to(`game:${pin}`).emit("c4:state", session);
+}
 
 // Configure Vite or Serve SPA Dist files
 async function startServer() {

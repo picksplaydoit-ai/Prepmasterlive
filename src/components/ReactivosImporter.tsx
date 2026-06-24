@@ -662,7 +662,7 @@ Pista: Cuna de los antiguos faraones.`);
         >
           <option value="quiz_live">Quiz Live 🎯</option>
           <option value="exam_mode">Modo Examen 📝</option>
-          <option value="mexicanos">100 Mexicanos Dijeron 🇲🇽</option>
+          <option value="mexicanos">100 Estudiantes Dijeron 🧑‍🎓</option>
           <option value="jeopardy">Jeopardy 🏆</option>
         </select>
       </div>
@@ -838,7 +838,15 @@ Respuesta: B`}
               <textarea
                 value={pastedText}
                 onChange={(e) => setPastedText(e.target.value)}
-                placeholder="Pega tu texto aquí...&#10;&#10;Ejemplo completo:&#10;Pregunta:&#10;¿Cuál es la fórmula del agua?&#10;A) CO2&#10;B) H2O&#10;C) NaCl&#10;D) O2&#10;Respuesta: B&#10;Tiempo: 30&#10;Puntos: 1000&#10;Tema: Química&#10;&#10;O formato simplificado:&#10;¿Cuál es la fórmula del agua?&#10;A) CO2&#10;B) H2O&#10;C) NaCl&#10;D) O2&#10;Respuesta: B"
+                placeholder={
+                  activeGameType === "quiz_live"
+                    ? "Pregunta: ¿Cuál es el pH neutro del agua destilada?\nA) 5\nB) 7\nC) 9\nD) 14\nRespuesta: B\nTiempo: 20\nPuntos: 1000\nTema: Química"
+                    : activeGameType === "exam_mode"
+                      ? "Pregunta: ¿Cuál es el pH neutro del agua destilada?\nA) 5\nB) 7\nC) 9\nD) 14\nRespuesta: B\nPuntos: 5\nTema: Química\nRetroalimentación: El pH del agua neutra es 7."
+                      : activeGameType === "mexicanos"
+                        ? "Pregunta: Cosas que llevas a la playa\nRespuesta: Toalla|45|toallas\nRespuesta: Bloqueador solar|30\nRespuesta: Traje de baño|15\nTema: General\nRonda: 1"
+                        : "Categoría: Química\nValor: 400\nPregunta: ¿Qué tipo de enlace comparte electrones?\nRespuesta: Covalente"
+                }
                 className="w-full min-h-[300px] bg-slate-50 border border-slate-350 focus:border-indigo-500 focus:bg-white rounded-2xl p-5 text-xs font-mono font-semibold text-slate-850 outline-none transition-all placeholder:text-slate-400"
                 maxLength={500000}
                 id="textarea-pasted-reactivos"

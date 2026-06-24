@@ -6,6 +6,13 @@ import {
 import { socket } from "../lib/socket";
 import { Player, Team } from "../types";
 import { AvatarRenderer, AVATAR_LIST, AVATAR_CATEGORIES, getAvatarById } from "./AvatarCatalog";
+import { playGameSound } from "../lib/sound";
+import PictionaryStudent from "../games/pictionary/PictionaryStudent";
+import HorseRaceStudent from "../games/horse-race/HorseRaceStudent";
+import HeadbanzStudent from "../games/headbanz/HeadbanzStudent";
+import Conecta4Student from "../games/conecta4/Conecta4Student";
+import { useBuzzer } from "../core/BuzzerEngine";
+import StudentBuzzerPanel from "./StudentBuzzerPanel";
 
 function deterministicShuffle<T>(array: T[], seedStr: string): T[] {
   const arr = [...array];
@@ -65,7 +72,30 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
   const [isConnected, setIsConnected] = useState(socket.connected);
 
   // Game Platform modular variables (2.0.0)
-  const [activeGameType, setActiveGameType] = useState<'quiz_live' | 'mexicanos' | 'jeopardy' | 'exam'>('quiz_live');
+  const [activeGameType, setActiveGameType] = useState<string>('quiz_live');
+
+  // Universal response buzzer hook
+  const {
+    isOpen: universalBuzzerOpen,
+    buzzed: universalBuzzerBuzzed,
+    myPosition: universalBuzzerPosition,
+    myReactionTime: universalBuzzerReactionTime,
+    pressBuzzer: triggerUniversalBuzzer
+  } = useBuzzer(joinedPin, activeGameType || "general");
+
+  const handlePressBuzzer = () => {
+    const pId = playerInfo?.id || socket.id || "temp-player";
+    const pName = name || playerInfo?.name || "Estudiante";
+    const tId = playerInfo?.teamId || selectedTeamId || null;
+    const tName = roomTeams.find(t => t.id === tId)?.name || null;
+
+    triggerUniversalBuzzer({
+      playerId: pId,
+      name: pName,
+      teamId: tId,
+      teamName: tName
+    });
+  };
   
   // 100 Mexicanos states
   const [mexicanosQuestionText, setMexicanosQuestionText] = useState("");
@@ -87,6 +117,8 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
   const [examTimeTaken, setExamTimeTaken] = useState<number | null>(null);
   const [examTimeLimitMinutes, setExamTimeLimitMinutes] = useState<number | null>(null);
   const [examRemainingSeconds, setExamRemainingSeconds] = useState<number | null>(null);
+  const [examNoticeAccepted, setExamNoticeAccepted] = useState(false);
+  const [showFocusAlert, setShowFocusAlert] = useState(false);
 
   // Active question details for student view
   const [activeQuestion, setActiveQuestion] = useState<{
@@ -253,6 +285,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
 
       // 2.1.3: Recover detailed Exam Progress state on reconnect or join
       if ((data as any).examState) {
+        setExamNoticeAccepted(true);
         const estate = (data as any).examState;
         const sId = data.player.playerId || localStorage.getItem("prepmaster_player_id") || "random_player";
         const shuffled = deterministicShuffle(estate.examQuestions || [], sId);
@@ -376,6 +409,8 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       setExamCompleted(false);
       setExamTimeTaken(null);
       setExamTimeLimitMinutes(data.timeLimitMinutes || null);
+      setExamNoticeAccepted(false);
+      setShowFocusAlert(false);
     });
 
     socket.on("exam:ended", () => {
@@ -440,6 +475,15 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
         streak: data.streak,
         answeredThisQuestion: data.answeredThisQuestion
       });
+
+      // Play correct/incorrect sounds for Quiz Live
+      if (activeGameType !== "exam" && data.answeredThisQuestion) {
+        if (data.isCorrect) {
+          playGameSound("correcta");
+        } else {
+          playGameSound("incorrecta");
+        }
+      }
       
       // Update local player state
       if (playerInfo) {
@@ -471,6 +515,61 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       socket.off("exam:ended");
     };
   }, [activeQuestion, playerInfo]);
+
+  // Monitor focus / tab visibility events for Modo Examen
+  useEffect(() => {
+    if (activeGameType !== "exam" || examCompleted || !examNoticeAccepted || !joinedPin) return;
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        socket.emit("game:player-message", {
+          pin: joinedPin,
+          event: "exam:register-event",
+          playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
+          name: playerInfo?.name || name,
+          eventType: "Cambio de pestaña",
+          description: "El alumno cambió de pestaña o minimizó el navegador.",
+          currentQuestionIndex: examCurrentQuestionIndex
+        });
+        setShowFocusAlert(true);
+      }
+    };
+
+    const handleWindowBlur = () => {
+      socket.emit("game:player-message", {
+        pin: joinedPin,
+        event: "exam:register-event",
+        playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
+        name: playerInfo?.name || name,
+        eventType: "Pérdida de foco",
+        description: "El alumno hizo clic fuera de la ventana del examen u otra ventana se superpuso.",
+        currentQuestionIndex: examCurrentQuestionIndex
+      });
+      setShowFocusAlert(true);
+    };
+
+    const handleBeforeUnload = () => {
+      socket.emit("game:player-message", {
+        pin: joinedPin,
+        event: "exam:register-event",
+        playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
+        name: playerInfo?.name || name,
+        eventType: "Recarga o cierre",
+        description: "El alumno intentó recargar o cerrar la página del examen.",
+        currentQuestionIndex: examCurrentQuestionIndex
+      });
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("blur", handleWindowBlur);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [activeGameType, examCompleted, examNoticeAccepted, joinedPin, playerInfo, name, examCurrentQuestionIndex]);
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1041,7 +1140,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
         <div className="bg-slate-900 text-white p-6 rounded-3xl border border-slate-800 text-center space-y-6 shadow-xl animate-fade-in" id="student-mexicanos-panel">
           <div className="space-y-1">
             <span className="bg-amber-500 text-slate-950 font-black text-[10px] px-2.5 py-0.5 rounded uppercase font-mono">
-              🇲🇽 Buzzer Activo
+              🧑‍🎓 Buzzer Activo
             </span>
             <p className="text-xs text-slate-400 font-sans italic">Reactivo de Encuesta en Proyección</p>
           </div>
@@ -1128,6 +1227,26 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
             </div>
           )}
         </div>
+      );
+    }
+    else if (activeGameType === "pictionary") {
+      gameView = (
+        <PictionaryStudent socket={socket} pin={joinedPin} />
+      );
+    }
+    else if (activeGameType === "headbanz") {
+      gameView = (
+        <HeadbanzStudent socket={socket} pin={joinedPin} playerName={name} playerId={socket.id || name} />
+      );
+    }
+    else if (activeGameType === "conecta_4") {
+      gameView = (
+        <Conecta4Student socket={socket} pin={joinedPin} playerName={name} playerId={socket.id || name} />
+      );
+    }
+    else if (activeGameType === "horse-race" || activeGameType === "horse_race") {
+      gameView = (
+        <HorseRaceStudent socket={socket} pin={joinedPin} />
       );
     }
     else if (activeGameType === "exam") {
@@ -1293,120 +1412,175 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
           });
         };
 
-        gameView = (
-          <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 space-y-5 shadow-xl animate-fade-in" id="student-exam-active-card">
-            <div className="flex justify-between items-center text-xs text-slate-450 border-b border-rose-50 pb-3">
-              <span className="font-extrabold uppercase text-[10px] tracking-wide text-rose-600 bg-rose-50 border border-rose-100 px-2 rounded">Examen Individual</span>
-              <span className="font-mono font-bold">Reactivo {examCurrentQuestionIndex + 1} de {examQuestions.length}</span>
-            </div>
-
-            {examRemainingSeconds !== null && (
-              <div className={`p-3 rounded-2xl border text-center font-sans tracking-wide font-black flex items-center justify-center gap-2 animate-pulse ${
-                examRemainingSeconds <= 60
-                  ? "bg-rose-50 border-rose-200 text-rose-700 font-extrabold animate-bounce"
-                  : examRemainingSeconds <= 300
-                    ? "bg-amber-50 border-amber-200 text-amber-700 font-bold"
-                    : "bg-indigo-50 border-indigo-100 text-indigo-700 font-semibold"
-              }`} id="student-exam-timer-bar">
-                <span className="text-xs">⏱️ Tiempo restante:</span>
-                <span className="font-mono text-sm leading-none font-black">
-                  {Math.floor(examRemainingSeconds / 60).toString().padStart(2, '0')}:{Math.floor(examRemainingSeconds % 60).toString().padStart(2, '0')}
-                </span>
+        if (!examNoticeAccepted) {
+          gameView = (
+            <div className="bg-white border-2 border-amber-200 rounded-3xl p-6 sm:p-8 space-y-6 shadow-xl animate-fade-in text-center max-w-lg mx-auto" id="exam-privacy-notice-card">
+              <div className="w-16 h-16 bg-amber-50 border border-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
+                <AlertCircle size={32} />
               </div>
-            )}
+              
+              <div className="space-y-2">
+                <h3 className="text-lg font-black text-slate-900 font-sans">Aviso de Privacidad y Control Académico</h3>
+                <p className="text-xs text-slate-600 font-medium font-sans leading-relaxed">
+                  Durante el examen se registrarán cambios de pestaña, desconexiones y recargas para control académico.
+                </p>
+              </div>
 
-            <div className="text-left space-y-2">
-              <span className="text-[10px] font-black uppercase tracking-wider text-rose-600 bg-rose-50 border border-rose-100 px-2.5 py-1 rounded inline-block font-mono">
-                Reactivo {examCurrentQuestionIndex + 1}
-              </span>
-              <p className="text-sm font-black text-slate-900 leading-normal font-sans pt-1">
-                {currentQ.text}
-              </p>
-            </div>
-
-            <div className="space-y-2.5 pt-1">
-              {currentQ.options.map((opt: string, idx: number) => {
-                if (!opt || !opt.trim()) return null;
-                const wasChosen = selectedIndex === idx;
-                
-                return (
-                  <button
-                    key={idx}
-                    onClick={() => handleChooseOption(idx)}
-                    className={`w-full p-4 rounded-xl text-left text-xs font-bold leading-normal border shadow-sm transition-all flex items-center justify-between cursor-pointer ${
-                      wasChosen 
-                        ? "bg-indigo-50 border-2 border-indigo-650 text-indigo-950 font-black shadow-md ring-1 ring-indigo-600 scale-[1.01]" 
-                        : "bg-white border-slate-200 hover:bg-slate-105 hover:border-slate-350 text-slate-900 font-bold"
-                    }`}
-                  >
-                    <span>{opt}</span>
-                    {wasChosen && <span className="text-[10px] bg-indigo-600 text-white px-2 py-0.5 rounded font-black uppercase shrink-0 font-mono text-center">Marcada</span>}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="flex justify-between items-center pt-3 border-t border-slate-100 animate-fade-in">
               <button
-                onClick={() => setExamCurrentQuestionIndex(prev => Math.max(0, prev - 1))}
-                disabled={examCurrentQuestionIndex === 0}
-                className="px-4 py-2 text-xs font-bold bg-slate-50 border border-slate-200 rounded-xl hover:bg-slate-100 cursor-pointer disabled:opacity-20"
+                onClick={() => setExamNoticeAccepted(true)}
+                className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs rounded-xl shadow-md cursor-pointer transition-all uppercase tracking-wider"
+                id="btn-accept-exam-notice"
               >
-                Anterior
+                Entendido, Comenzar Examen
               </button>
-
-              {examCurrentQuestionIndex === examQuestions.length - 1 ? (
-                <button
-                  onClick={() => {
-                    const finalDuration = Math.round((Date.now() - examTimeStart) / 1000);
-                    setExamCompleted(true);
-                    setExamTimeTaken(finalDuration);
-
-                    let correctAttempts = 0;
-                    let incorrectAttempts = 0;
-                    examQuestions.forEach((q, index) => {
-                      const optionChosen = examAnswers[index];
-                      if (optionChosen === undefined) return;
-                      if (optionChosen === q.correctOption) {
-                        correctAttempts++;
-                      } else {
-                        incorrectAttempts++;
-                      }
-                    });
-
-                    socket.emit("game:player-message", {
-                      pin: joinedPin,
-                      event: "exam:player-progress",
-                      playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
-                      name: name || localStorage.getItem("prepmaster_name") || "Alumno",
-                      solvedCount: Object.keys(examAnswers).length,
-                      correctCount: correctAttempts,
-                      incorrectCount: incorrectAttempts,
-                      completed: true,
-                      timeTakenSeconds: finalDuration,
-                      answers: examAnswers,
-                      totalQuestions: examQuestions.length
-                    });
-                  }}
-                  disabled={!isSelected}
-                  className="px-6 py-2 text-xs font-black bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl cursor-pointer disabled:opacity-30 flex items-center gap-1.5 shadow-md animate-pulse"
-                >
-                  <span>Finalizar Examen</span>
-                  <Check size={13} />
-                </button>
-              ) : (
-                <button
-                  onClick={() => setExamCurrentQuestionIndex(prev => Math.min(examQuestions.length - 1, prev + 1))}
-                  disabled={!isSelected}
-                  className="px-4.5 py-2 text-xs font-black bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl cursor-pointer disabled:opacity-30 flex items-center gap-1.5"
-                >
-                  <span>Siguiente</span>
-                  <ArrowRight size={13} />
-                </button>
-              )}
             </div>
-          </div>
-        );
+          );
+        } else {
+          gameView = (
+            <div className="bg-white border border-slate-200 rounded-3xl p-5 sm:p-6 space-y-5 shadow-xl animate-fade-in" id="student-exam-active-card">
+              {showFocusAlert && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl p-4 text-xs font-semibold flex items-start gap-3 text-left animate-shake" id="student-exam-focus-alert">
+                  <AlertCircle className="shrink-0 text-rose-500 mt-0.5 animate-pulse" size={16} />
+                  <div className="flex-1 space-y-1">
+                    <p className="font-extrabold uppercase tracking-wide text-rose-900 leading-none">Alerta de Integridad</p>
+                    <p className="text-rose-700 font-sans leading-normal">
+                      Se registró una salida o cambio de pestaña durante el examen.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={() => setShowFocusAlert(false)}
+                    className="text-rose-450 hover:text-rose-900 font-black text-[10.5px] px-2 py-1 rounded-md bg-white border border-rose-100 hover:bg-rose-100"
+                  >
+                    Entendido
+                  </button>
+                </div>
+              )}
+
+              <div className="flex justify-between items-center text-xs text-slate-450 border-b border-rose-50 pb-3">
+                <span className="font-extrabold uppercase text-[10px] tracking-wide text-rose-600 bg-rose-50 border border-rose-100 px-2 rounded">Examen Individual</span>
+                <span className="font-mono font-bold">Reactivo {examCurrentQuestionIndex + 1} de {examQuestions.length}</span>
+              </div>
+
+              {examRemainingSeconds !== null && (
+                <div className={`p-3 rounded-2xl border text-center font-sans tracking-wide font-black flex items-center justify-center gap-2 animate-pulse ${
+                  examRemainingSeconds <= 60
+                    ? "bg-rose-50 border-rose-200 text-rose-700 font-extrabold animate-bounce"
+                    : examRemainingSeconds <= 300
+                      ? "bg-amber-50 border-amber-200 text-amber-700 font-bold"
+                      : "bg-indigo-50 border-indigo-100 text-indigo-700 font-semibold"
+                }`} id="student-exam-timer-bar">
+                  <span className="text-xs">⏱️ Tiempo restante:</span>
+                  <span className="font-mono text-sm leading-none font-black">
+                    {Math.floor(examRemainingSeconds / 60).toString().padStart(2, '0')}:{Math.floor(examRemainingSeconds % 60).toString().padStart(2, '0')}
+                  </span>
+                </div>
+              )}
+
+              <div className="text-left space-y-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-rose-600 bg-rose-50 border border-rose-100 px-2.5 py-1 rounded inline-block font-mono">
+                  Reactivo {examCurrentQuestionIndex + 1}
+                </span>
+                <p className="text-sm font-black text-slate-900 leading-normal font-sans pt-1">
+                  {currentQ.text}
+                </p>
+              </div>
+
+              <div className="space-y-2.5 pt-1">
+                {currentQ.options.map((opt: string, idx: number) => {
+                  if (!opt || !opt.trim()) return null;
+                  const wasChosen = selectedIndex === idx;
+                  let shape = "";
+                  let accentColor = "";
+                  let label = String.fromCharCode(65 + idx);
+                  if (idx === 0) { shape = "▲"; accentColor = "text-rose-600 bg-rose-50 border-rose-100"; }
+                  else if (idx === 1) { shape = "◆"; accentColor = "text-blue-600 bg-blue-50 border-blue-100"; }
+                  else if (idx === 2) { shape = "●"; accentColor = "text-amber-600 bg-amber-50 border-amber-150"; }
+                  else if (idx === 3) { shape = "■"; accentColor = "text-emerald-600 bg-emerald-50 border-emerald-100"; }
+                  
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => handleChooseOption(idx)}
+                      className={`w-full p-4 rounded-xl text-left text-xs font-bold leading-normal border shadow-sm transition-all flex items-center justify-between cursor-pointer ${
+                        wasChosen 
+                          ? "bg-indigo-50 border-2 border-indigo-650 text-indigo-950 font-black shadow-md ring-1 ring-indigo-600 scale-[1.01]" 
+                          : "bg-white border-slate-200 hover:bg-slate-105 hover:border-slate-350 text-slate-900 font-bold"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className={`w-6 h-6 rounded flex items-center justify-center font-black border text-xs shrink-0 ${accentColor}`}>
+                          {shape}
+                        </span>
+                        <span>{opt}</span>
+                      </div>
+                      {wasChosen && <span className="text-[10px] bg-indigo-650 text-white px-2 py-0.5 rounded font-black uppercase shrink-0 font-mono text-center">Marcada</span>}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex justify-between items-center pt-3 border-t border-slate-100 animate-fade-in">
+                <button
+                  onClick={() => setExamCurrentQuestionIndex(prev => Math.max(0, prev - 1))}
+                  disabled={examCurrentQuestionIndex === 0}
+                  className="px-4 py-2 text-xs font-bold bg-slate-50 border border-slate-200 rounded-xl hover:bg-slate-100 cursor-pointer disabled:opacity-20"
+                >
+                  Anterior
+                </button>
+
+                {examCurrentQuestionIndex === examQuestions.length - 1 ? (
+                  <button
+                    onClick={() => {
+                      const finalDuration = Math.round((Date.now() - examTimeStart) / 1000);
+                      setExamCompleted(true);
+                      setExamTimeTaken(finalDuration);
+
+                      let correctAttempts = 0;
+                      let incorrectAttempts = 0;
+                      examQuestions.forEach((q, index) => {
+                        const optionChosen = examAnswers[index];
+                        if (optionChosen === undefined) return;
+                        if (optionChosen === q.correctOption) {
+                          correctAttempts++;
+                        } else {
+                          incorrectAttempts++;
+                        }
+                      });
+
+                      socket.emit("game:player-message", {
+                        pin: joinedPin,
+                        event: "exam:player-progress",
+                        playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
+                        name: name || localStorage.getItem("prepmaster_name") || "Alumno",
+                        solvedCount: Object.keys(examAnswers).length,
+                        correctCount: correctAttempts,
+                        incorrectCount: incorrectAttempts,
+                        completed: true,
+                        timeTakenSeconds: finalDuration,
+                        answers: examAnswers,
+                        totalQuestions: examQuestions.length
+                      });
+                    }}
+                    disabled={!isSelected}
+                    className="px-6 py-2 text-xs font-black bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl cursor-pointer disabled:opacity-30 flex items-center gap-1.5 shadow-md animate-pulse"
+                  >
+                    <span>Finalizar Examen</span>
+                    <Check size={13} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setExamCurrentQuestionIndex(prev => Math.min(examQuestions.length - 1, prev + 1))}
+                    disabled={!isSelected}
+                    className="px-4.5 py-2 text-xs font-black bg-indigo-600 hover:bg-indigo-750 text-white rounded-xl cursor-pointer disabled:opacity-30 flex items-center gap-1.5"
+                  >
+                    <span>Siguiente</span>
+                    <ArrowRight size={13} />
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        }
       }
     }
   }
@@ -1443,7 +1617,17 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
         </div>
       </div>
 
-      {gameView}
+      {universalBuzzerOpen || universalBuzzerBuzzed ? (
+        <StudentBuzzerPanel
+          isOpen={universalBuzzerOpen}
+          buzzed={universalBuzzerBuzzed}
+          myPosition={universalBuzzerPosition}
+          myReactionTime={universalBuzzerReactionTime}
+          onPress={handlePressBuzzer}
+        />
+      ) : (
+        gameView
+      )}
     </div>
   );
 }

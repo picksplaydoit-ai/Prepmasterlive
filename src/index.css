@@ -5,3 +5,67 @@
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
+
+/* HIGH CONTRAST ACCESSIBILITY MODES */
+.high-contrast {
+  --color-slate-50: #ffffff !important;
+  --color-slate-100: #ffffff !important;
+  --color-slate-200: #000000 !important;
+  --color-slate-300: #000000 !important;
+  --color-slate-500: #000000 !important;
+  --color-slate-600: #000000 !important;
+  --color-slate-700: #000000 !important;
+  --color-slate-800: #000000 !important;
+  --color-slate-900: #000000 !important;
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+.high-contrast button,
+.high-contrast input,
+.high-contrast select {
+  border: 2px solid #000000 !important;
+  background-color: #ffffff !important;
+  color: #000000 !important;
+}
+
+.high-contrast button:hover {
+  background-color: #000000 !important;
+  color: #ffffff !important;
+}
+
+/* PROJECTOR OPTIMIZATION */
+.projector-mode {
+  image-rendering: pixelated;
+  text-shadow: 0.5px 0.5px 0px #000;
+}
+
+.projector-mode h1,
+.projector-mode h2,
+.projector-mode h3,
+.projector-mode p,
+.projector-mode span,
+.projector-mode li,
+.projector-mode label {
+  color: #000000 !important;
+  font-weight: 800 !important;
+}
+
+.projector-mode .bg-white,
+.projector-mode .bg-slate-50 {
+  background-color: #ffffff !important;
+  border-color: #1e293b !important;
+  border-width: 2px !important;
+}
+
+/* Kahoot-Style Answers Glow & Contrast */
+.kahoot-pulse {
+  animation: pulse-border 1.5s infinite ease-in-out;
+}
+
+@keyframes pulse-border {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+

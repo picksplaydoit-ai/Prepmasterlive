@@ -5,6 +5,8 @@ import {
 import { socket } from "../../lib/socket";
 import { Questionnaire, Question, Team, Player } from "../../types";
 import { playGameSound, getSoundsEnabled, setSoundsEnabled } from "../../lib/sound";
+import TeacherBuzzerPanel from "../../components/TeacherBuzzerPanel";
+import { BuzzerPress } from "../../core/BuzzerEngine";
 
 interface MexicanosProps {
   quiz: Questionnaire;
@@ -26,7 +28,8 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
   const [strikes, setStrikes] = useState(0);
   const [teamScores, setTeamScores] = useState<Record<string, number>>({});
   const [activeTeamId, setActiveTeamId] = useState<string>("");
-  const [buzzedPlayer, setBuzzedPlayer] = useState<{ name: string; teamName?: string; teamColor?: string } | null>(null);
+  const [buzzedPlayer, setBuzzedPlayer] = useState<{ name: string; teamName?: string; teamColor?: string; playerId?: string } | null>(null);
+  const [disabledWinners, setDisabledWinners] = useState<string[]>([]);
   
   const [soundActive, setSoundActive] = useState(getSoundsEnabled());
   const [animateStrike, setAnimateStrike] = useState(false);
@@ -57,6 +60,8 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
     const currentQ = quiz.questions[currentQuestionIndex];
     setStrikes(0);
     setBuzzedPlayer(null);
+    setDisabledWinners([]);
+    socket.emit("buzzer:reset", { pin });
 
     // Let's parse custom ChatGPT format if possible or fall back to standard options
     // Format can be text like: "Aflatoxina|40" or just standard choice "CO2"
@@ -94,33 +99,19 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
     });
   }, [currentQuestionIndex, quiz, pin]);
 
-  // Handle remote buzzer from students
-  useEffect(() => {
-    const handleBuzz = (data: { name: string; avatarId?: string; teamId?: string }) => {
-      if (buzzedPlayer) return; // Only first one can buzz
-
-      const pTeam = teams.find(t => t.id === data.teamId);
-      setBuzzedPlayer({
-        name: data.name,
-        teamName: pTeam?.name || "Sin Equipo",
-        teamColor: pTeam?.color || "#64748b"
-      });
-      playGameSound("seleccionar_casilla");
-
-      // Stop others
-      socket.emit("game:host-message", {
-        pin,
-        event: "mexicanos:buzzed-state",
-        buzzedName: data.name,
-        buzzedTeam: pTeam?.name || ""
-      });
-    };
-
-    socket.on("mexicanos:player-buzz", handleBuzz);
-    return () => {
-      socket.off("mexicanos:player-buzz", handleBuzz);
-    };
-  }, [buzzedPlayer, teams, pin]);
+  const handleSelectWinner = (press: BuzzerPress) => {
+    const pTeam = teams.find(t => t.id === press.teamId);
+    if (press.teamId) {
+      setActiveTeamId(press.teamId);
+    }
+    setBuzzedPlayer({
+      name: press.playerName,
+      teamName: pTeam?.name || press.teamName || "Sin Equipo",
+      teamColor: pTeam?.color || "#64748b",
+      playerId: press.playerId
+    });
+    playGameSound("seleccionar_casilla");
+  };
 
   const handleRevealAnswer = (index: number) => {
     if (surveyAnswers[index].revealed) return;
@@ -285,7 +276,7 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <span className="bg-amber-500 text-slate-950 text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-md">
-              🇲🇽 100 Mexicanos Dijeron
+              🧑‍🎓 100 Estudiantes Dijeron
             </span>
             <span className="text-xs text-slate-400 font-mono">
               Reactivo {currentQuestionIndex + 1} de {quiz.questions.length}
@@ -369,8 +360,7 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
 
               <button
                 onClick={handleResetBuzzer}
-                disabled={!buzzedPlayer}
-                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 disabled:opacity-50 text-slate-300 font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer"
+                className="px-4 py-2.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 hover:border-slate-600 text-slate-300 font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-pointer shadow-sm transition-all hover:scale-102"
               >
                 Resetear Buzzer
               </button>
@@ -389,28 +379,41 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
         {/* Right Admin controls and teams scores */}
         <div className="lg:col-span-4 space-y-5">
           
-          {/* Active Buzzer details */}
-          <div className={`border p-4.5 rounded-2xl shadow-sm text-center space-y-3 transition-colors ${
-            buzzedPlayer 
-              ? "bg-gradient-to-br from-amber-950/20 to-slate-900 border-amber-500/40 text-amber-200" 
-              : "bg-slate-800/20 border-slate-800 text-slate-400"
-          }`}>
-            <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-450 font-mono">Control de Buzzer</h4>
-            {buzzedPlayer ? (
-              <div className="space-y-1.5 py-2 animate-pulse">
-                <p className="text-xl">⚡</p>
-                <p className="text-lg font-black text-white">{buzzedPlayer.name}</p>
-                <p className="text-[10px] font-bold px-3 py-0.5 rounded-full inline-block uppercase text-slate-950" style={{ backgroundColor: buzzedPlayer.teamColor }}>
-                  {buzzedPlayer.teamName}
-                </p>
+          {/* Universal Buzzer Panel */}
+          <TeacherBuzzerPanel
+            pin={pin}
+            gameMode="mexicanos"
+            onSelectWinner={handleSelectWinner}
+            disabledWinners={disabledWinners}
+          />
+
+          {/* Active Buzzer details / current responder */}
+          {buzzedPlayer && (
+            <div className="bg-gradient-to-br from-indigo-950/40 to-slate-950 border border-indigo-500/30 p-5 rounded-2xl text-center space-y-3 shadow-md animate-fade-in">
+              <span className="text-2xl block animate-bounce">🎙️</span>
+              <p className="text-[10px] font-mono font-black text-indigo-400 uppercase tracking-wider">Responder actual</p>
+              <div>
+                <p className="text-md font-black text-white">{buzzedPlayer.name}</p>
+                {buzzedPlayer.teamName && (
+                  <p className="text-[10px] font-bold px-3 py-0.5 rounded-full inline-block uppercase text-slate-950 mt-1" style={{ backgroundColor: buzzedPlayer.teamColor }}>
+                    {buzzedPlayer.teamName}
+                  </p>
+                )}
               </div>
-            ) : (
-              <div className="py-4 space-y-1">
-                <p className="text-sm font-semibold opacity-70">Esperando timbre...</p>
-                <p className="text-[9px] font-sans opacity-40">Alumnos conectados deben pulsar el botón de Buzzer para responder</p>
-              </div>
-            )}
-          </div>
+              <button
+                onClick={() => {
+                  if (buzzedPlayer.playerId) {
+                    setDisabledWinners(prev => [...prev, buzzedPlayer.playerId!]);
+                  }
+                  setBuzzedPlayer(null);
+                  playGameSound("error");
+                }}
+                className="w-full text-center text-[10px] bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 font-bold p-2 rounded-lg border border-rose-900/30 cursor-pointer transition-all hover:scale-102"
+              >
+                No respondió / Falló (Habilitar siguiente)
+              </button>
+            </div>
+          )}
 
           {/* Current Game Strikes block */}
           <div className="bg-slate-800/40 border border-slate-800 p-4 rounded-2xl text-center space-y-2">
