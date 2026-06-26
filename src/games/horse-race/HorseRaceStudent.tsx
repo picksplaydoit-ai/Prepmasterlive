@@ -3,6 +3,7 @@ import { HorseRaceConfig, HorseRaceTeam, HorseRacePlayer } from "./horseRaceType
 import { Socket } from "socket.io-client";
 import { Check, X, Shield, Zap, Sparkles } from "lucide-react";
 import { playGameSound } from "../../lib/sound";
+import { safeStorage } from "../../lib/safeStorage";
 
 interface HorseRaceStudentProps {
   socket: any; // Socket.io Client
@@ -31,10 +32,10 @@ export default function HorseRaceStudent({ socket, pin }: HorseRaceStudentProps)
     // Join as a horse race player or fetch configuration
     socket.emit("horse:join", {
       pin,
-      name: localStorage.getItem("prepmaster_name") || "Estudiante",
-      avatarId: localStorage.getItem("prepmaster_avatar_id") || "cult_mariachi",
-      teamId: localStorage.getItem("prepmaster_team_id") || "",
-      playerId: localStorage.getItem("prepmaster_player_id") || ""
+      name: safeStorage.getItem("prepmaster_name") || "Estudiante",
+      avatarId: safeStorage.getItem("prepmaster_avatar_id") || "cult_mariachi",
+      teamId: safeStorage.getItem("prepmaster_team_id") || "",
+      playerId: safeStorage.getItem("prepmaster_player_id") || ""
     });
 
     socket.on("horse:join-success", ({ player: joinedPlayer, config: activeConfig, teams: activeTeams }) => {
@@ -101,13 +102,13 @@ export default function HorseRaceStudent({ socket, pin }: HorseRaceStudentProps)
   }, [pin]);
 
   const handleSelectTeam = (teamId: string) => {
-    localStorage.setItem("prepmaster_team_id", teamId);
+    safeStorage.setItem("prepmaster_team_id", teamId);
     socket.emit("horse:join", {
       pin,
-      name: localStorage.getItem("prepmaster_name") || "Estudiante",
-      avatarId: localStorage.getItem("prepmaster_avatar_id") || "cult_mariachi",
+      name: safeStorage.getItem("prepmaster_name") || "Estudiante",
+      avatarId: safeStorage.getItem("prepmaster_avatar_id") || "cult_mariachi",
       teamId,
-      playerId: localStorage.getItem("prepmaster_player_id") || ""
+      playerId: safeStorage.getItem("prepmaster_player_id") || ""
     });
     setStatus("lobby");
     playGameSound("descubrir_respuesta");

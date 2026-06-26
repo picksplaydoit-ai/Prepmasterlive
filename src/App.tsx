@@ -6,13 +6,14 @@ import StudentInterface from "./components/StudentInterface";
 import ReactivosImporter from "./components/ReactivosImporter";
 import { Questionnaire } from "./types";
 import { getSoundsEnabled, setSoundsEnabled } from "./lib/sound";
+import { safeStorage } from "./lib/safeStorage";
 
 export default function App() {
   // Screen views: 'home' | 'teacher' | 'student'
   const [role, setRole] = useState<'home' | 'teacher' | 'student'>('home');
   const [soundsEnabled, setSoundsEnabledState] = useState(getSoundsEnabled());
-  const [highContrast, setHighContrast] = useState<boolean>(() => localStorage.getItem("highContrast") === "true");
-  const [projectorMode, setProjectorMode] = useState<boolean>(() => localStorage.getItem("projectorMode") === "true");
+  const [highContrast, setHighContrast] = useState<boolean>(() => safeStorage.getItem("highContrast") === "true");
+  const [projectorMode, setProjectorMode] = useState<boolean>(() => safeStorage.getItem("projectorMode") === "true");
   
   // Teacher-specific routing state
   const [quizView, setQuizView] = useState<'dashboard' | 'editor' | 'importer'>('dashboard');
@@ -86,7 +87,7 @@ export default function App() {
             onClick={() => {
               const nextVal = !highContrast;
               setHighContrast(nextVal);
-              localStorage.setItem("highContrast", nextVal.toString());
+              safeStorage.setItem("highContrast", nextVal.toString());
             }}
             className={`flex items-center gap-1.5 text-xs font-black py-2 px-3 sm:px-3.5 rounded-xl transition-all border cursor-pointer shadow-xs ${
               highContrast
@@ -105,7 +106,7 @@ export default function App() {
             onClick={() => {
               const nextVal = !projectorMode;
               setProjectorMode(nextVal);
-              localStorage.setItem("projectorMode", nextVal.toString());
+              safeStorage.setItem("projectorMode", nextVal.toString());
             }}
             className={`flex items-center gap-1.5 text-xs font-black py-2 px-3 sm:px-3.5 rounded-xl transition-all border cursor-pointer shadow-xs ${
               projectorMode

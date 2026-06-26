@@ -13,6 +13,7 @@ import HeadbanzStudent from "../games/headbanz/HeadbanzStudent";
 import Conecta4Student from "../games/conecta4/Conecta4Student";
 import { useBuzzer } from "../core/BuzzerEngine";
 import StudentBuzzerPanel from "./StudentBuzzerPanel";
+import { safeStorage } from "../lib/safeStorage";
 
 function deterministicShuffle<T>(array: T[], seedStr: string): T[] {
   const arr = [...array];
@@ -40,9 +41,9 @@ interface StudentInterfaceProps {
 }
 
 export default function StudentInterface({ initialPin, initialGame }: StudentInterfaceProps = {}) {
-  const [pin, setPin] = useState(() => initialPin || localStorage.getItem("prepmaster_pin") || "");
-  const [name, setName] = useState(() => localStorage.getItem("prepmaster_name") || "");
-  const [selectedAvatarId, setSelectedAvatarId] = useState(() => localStorage.getItem("prepmaster_avatar_id") || "cult_mariachi");
+  const [pin, setPin] = useState(() => initialPin || safeStorage.getItem("prepmaster_pin") || "");
+  const [name, setName] = useState(() => safeStorage.getItem("prepmaster_name") || "");
+  const [selectedAvatarId, setSelectedAvatarId] = useState(() => safeStorage.getItem("prepmaster_avatar_id") || "cult_mariachi");
   const [activeCategory, setActiveCategory] = useState("Todos");
 
   // Sync initial pin from QR link
@@ -56,7 +57,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
   const [roomGameMode, setRoomGameMode] = useState<'individual' | 'teams'>('individual');
   const [roomTeams, setRoomTeams] = useState<Team[]>([]);
   const [playersInSession, setPlayersInSession] = useState<Player[]>([]);
-  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(() => localStorage.getItem("prepmaster_team_id") || null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(() => safeStorage.getItem("prepmaster_team_id") || null);
   
   const [joined, setJoined] = useState(false);
   const [joinedPin, setJoinedPin] = useState("");
@@ -149,11 +150,11 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
     const handleConnect = () => {
       setIsConnected(true);
       // Trigger automatic reconnection if we are disconnected middle-game
-      const storedPin = localStorage.getItem("prepmaster_pin");
-      const storedName = localStorage.getItem("prepmaster_name");
-      const storedPlayerId = localStorage.getItem("prepmaster_player_id");
-      const storedAvatarId = localStorage.getItem("prepmaster_avatar_id");
-      const storedTeamId = localStorage.getItem("prepmaster_team_id");
+      const storedPin = safeStorage.getItem("prepmaster_pin");
+      const storedName = safeStorage.getItem("prepmaster_name");
+      const storedPlayerId = safeStorage.getItem("prepmaster_player_id");
+      const storedAvatarId = safeStorage.getItem("prepmaster_avatar_id");
+      const storedTeamId = safeStorage.getItem("prepmaster_team_id");
 
       if (storedPin && storedName) {
         setSubmitting(true);
@@ -174,11 +175,11 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
     socket.on("disconnect", handleDisconnect);
 
     // Initial mount auto-join
-    const storedPin = localStorage.getItem("prepmaster_pin");
-    const storedName = localStorage.getItem("prepmaster_name");
-    const storedPlayerId = localStorage.getItem("prepmaster_player_id");
-    const storedAvatarId = localStorage.getItem("prepmaster_avatar_id");
-    const storedTeamId = localStorage.getItem("prepmaster_team_id");
+    const storedPin = safeStorage.getItem("prepmaster_pin");
+    const storedName = safeStorage.getItem("prepmaster_name");
+    const storedPlayerId = safeStorage.getItem("prepmaster_player_id");
+    const storedAvatarId = safeStorage.getItem("prepmaster_avatar_id");
+    const storedTeamId = safeStorage.getItem("prepmaster_team_id");
     if (storedPin && storedName && !joined) {
       setSubmitting(true);
       socket.emit("player:join", {
@@ -217,8 +218,8 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       }
     });
 
-    const studentPlayerId = playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player";
-    const studentName = name || localStorage.getItem("prepmaster_name") || "Alumno";
+    const studentPlayerId = playerInfo?.playerId || safeStorage.getItem("prepmaster_player_id") || "random_player";
+    const studentName = name || safeStorage.getItem("prepmaster_name") || "Alumno";
 
     socket.emit("game:player-message", {
       pin: joinedPin,
@@ -287,7 +288,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       if ((data as any).examState) {
         setExamNoticeAccepted(true);
         const estate = (data as any).examState;
-        const sId = data.player.playerId || localStorage.getItem("prepmaster_player_id") || "random_player";
+        const sId = data.player.playerId || safeStorage.getItem("prepmaster_player_id") || "random_player";
         const shuffled = deterministicShuffle(estate.examQuestions || [], sId);
         setExamQuestions(shuffled);
         setExamAnswers(estate.examAnswers || {});
@@ -329,17 +330,17 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       setSubmitting(false);
 
       // Persist credentials
-      localStorage.setItem("prepmaster_pin", data.pin);
-      localStorage.setItem("prepmaster_name", data.player.name);
+      safeStorage.setItem("prepmaster_pin", data.pin);
+      safeStorage.setItem("prepmaster_name", data.player.name);
       if (data.player.playerId) {
-        localStorage.setItem("prepmaster_player_id", data.player.playerId);
+        safeStorage.setItem("prepmaster_player_id", data.player.playerId);
       }
       if (data.player.avatarId) {
-        localStorage.setItem("prepmaster_avatar_id", data.player.avatarId);
+        safeStorage.setItem("prepmaster_avatar_id", data.player.avatarId);
         setSelectedAvatarId(data.player.avatarId);
       }
       if (data.player.teamId) {
-        localStorage.setItem("prepmaster_team_id", data.player.teamId);
+        safeStorage.setItem("prepmaster_team_id", data.player.teamId);
       }
     });
 
@@ -352,10 +353,10 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       setSubmitting(false);
       
       // If we got join error on active rejoin, clear invalid credentials gently
-      if (localStorage.getItem("prepmaster_pin")) {
-        localStorage.removeItem("prepmaster_pin");
-        localStorage.removeItem("prepmaster_name");
-        localStorage.removeItem("prepmaster_player_id");
+      if (safeStorage.getItem("prepmaster_pin")) {
+        safeStorage.removeItem("prepmaster_pin");
+        safeStorage.removeItem("prepmaster_name");
+        safeStorage.removeItem("prepmaster_player_id");
         setJoined(false);
       }
     });
@@ -400,7 +401,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
     // Exam Mode Listeners
     socket.on("exam:start", (data: { totalQuestions: number; questions: any[]; timeLimitMinutes?: number | null }) => {
       setActiveGameType("exam");
-      const sId = playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player";
+      const sId = playerInfo?.playerId || safeStorage.getItem("prepmaster_player_id") || "random_player";
       const shuffled = deterministicShuffle(data.questions || [], sId);
       setExamQuestions(shuffled);
       setExamCurrentQuestionIndex(0);
@@ -525,7 +526,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
         socket.emit("game:player-message", {
           pin: joinedPin,
           event: "exam:register-event",
-          playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
+          playerId: playerInfo?.playerId || safeStorage.getItem("prepmaster_player_id") || "random_player",
           name: playerInfo?.name || name,
           eventType: "Cambio de pestaña",
           description: "El alumno cambió de pestaña o minimizó el navegador.",
@@ -539,7 +540,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       socket.emit("game:player-message", {
         pin: joinedPin,
         event: "exam:register-event",
-        playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
+        playerId: playerInfo?.playerId || safeStorage.getItem("prepmaster_player_id") || "random_player",
         name: playerInfo?.name || name,
         eventType: "Pérdida de foco",
         description: "El alumno hizo clic fuera de la ventana del examen u otra ventana se superpuso.",
@@ -552,7 +553,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       socket.emit("game:player-message", {
         pin: joinedPin,
         event: "exam:register-event",
-        playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
+        playerId: playerInfo?.playerId || safeStorage.getItem("prepmaster_player_id") || "random_player",
         name: playerInfo?.name || name,
         eventType: "Recarga o cierre",
         description: "El alumno intentó recargar o cerrar la página del examen.",
@@ -585,7 +586,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
     }
 
     // Persist local avatar
-    localStorage.setItem("prepmaster_avatar_id", selectedAvatarId);
+    safeStorage.setItem("prepmaster_avatar_id", selectedAvatarId);
 
     setSubmitting(true);
     socket.emit("player:join", { 
@@ -599,10 +600,10 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
     if (joinedPin) {
       socket.emit("player:leave", { pin: joinedPin });
     }
-    localStorage.removeItem("prepmaster_pin");
-    localStorage.removeItem("prepmaster_name");
-    localStorage.removeItem("prepmaster_player_id");
-    localStorage.removeItem("prepmaster_team_id");
+    safeStorage.removeItem("prepmaster_pin");
+    safeStorage.removeItem("prepmaster_name");
+    safeStorage.removeItem("prepmaster_player_id");
+    safeStorage.removeItem("prepmaster_team_id");
     setSelectedTeamId(null);
     setJoined(false);
     setJoinedPin("");
@@ -863,13 +864,13 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
             setSubmitting(true);
             
             // Persist the selected team locally
-            localStorage.setItem("prepmaster_team_id", selectedTeamId);
+            safeStorage.setItem("prepmaster_team_id", selectedTeamId);
             
             // Re-join with teamId so server updates our player entry
             socket.emit("player:join", {
               pin: joinedPin,
               name: playerInfo?.name || name,
-              playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || undefined,
+              playerId: playerInfo?.playerId || safeStorage.getItem("prepmaster_player_id") || undefined,
               avatarId: playerInfo?.avatarId || selectedAvatarId,
               teamId: selectedTeamId
             });
@@ -1400,8 +1401,8 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
           socket.emit("game:player-message", {
             pin: joinedPin,
             event: "exam:player-progress",
-            playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
-            name: name || localStorage.getItem("prepmaster_name") || "Alumno",
+            playerId: playerInfo?.playerId || safeStorage.getItem("prepmaster_player_id") || "random_player",
+            name: name || safeStorage.getItem("prepmaster_name") || "Alumno",
             solvedCount: Object.keys(newAnswers).length,
             correctCount: correctAttempts,
             incorrectCount: incorrectAttempts,
@@ -1550,8 +1551,8 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
                       socket.emit("game:player-message", {
                         pin: joinedPin,
                         event: "exam:player-progress",
-                        playerId: playerInfo?.playerId || localStorage.getItem("prepmaster_player_id") || "random_player",
-                        name: name || localStorage.getItem("prepmaster_name") || "Alumno",
+                        playerId: playerInfo?.playerId || safeStorage.getItem("prepmaster_player_id") || "random_player",
+                        name: name || safeStorage.getItem("prepmaster_name") || "Alumno",
                         solvedCount: Object.keys(examAnswers).length,
                         correctCount: correctAttempts,
                         incorrectCount: incorrectAttempts,

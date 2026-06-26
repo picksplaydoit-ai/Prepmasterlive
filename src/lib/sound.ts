@@ -1,10 +1,12 @@
 // Centralized Web Audio API Sound Synthesizer for Prepmaster Live 2.0.0
 // Functions fully local and offline, with no assets to download or load.
 
+import { safeStorage } from "./safeStorage";
+
 let isSoundSoundEnabled = true;
 
 try {
-  const saved = localStorage.getItem("prepmaster_sounds_enabled");
+  const saved = safeStorage.getItem("prepmaster_sounds_enabled");
   if (saved !== null) {
     isSoundSoundEnabled = saved === "true";
   }
@@ -15,7 +17,7 @@ try {
 export function setSoundsEnabled(enabled: boolean) {
   isSoundSoundEnabled = enabled;
   try {
-    localStorage.setItem("prepmaster_sounds_enabled", String(enabled));
+    safeStorage.setItem("prepmaster_sounds_enabled", String(enabled));
   } catch (e) {}
 }
 

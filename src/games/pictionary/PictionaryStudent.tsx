@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Users, Smile, Trophy, Play, CheckCircle2, AlertCircle, HelpCircle } from "lucide-react";
 import PictionaryCanvas from "./PictionaryCanvas";
 import { PictionaryConfig, PictionaryTeam, PictionaryWord } from "./pictionaryTypes";
+import { safeStorage } from "../../lib/safeStorage";
 
 interface PictionaryStudentProps {
   socket: any;
@@ -47,7 +48,7 @@ export default function PictionaryStudent({ socket, pin }: PictionaryStudentProp
   // Re-sync socket messages
   useEffect(() => {
     // Read previous credentials if any
-    const savedName = localStorage.getItem("prepmaster_pictionary_name") || "";
+    const savedName = safeStorage.getItem("prepmaster_pictionary_name") || "";
     if (savedName) setNickname(savedName);
 
     // Initial query on details
@@ -147,7 +148,7 @@ export default function PictionaryStudent({ socket, pin }: PictionaryStudentProp
       return;
     }
 
-    localStorage.setItem("prepmaster_pictionary_name", nickname.trim());
+    safeStorage.setItem("prepmaster_pictionary_name", nickname.trim());
 
     // Send register payload
     socket.emit("pictionary:join-team", {
