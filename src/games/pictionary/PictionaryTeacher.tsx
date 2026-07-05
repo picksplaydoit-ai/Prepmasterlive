@@ -60,7 +60,8 @@ export default function PictionaryTeacher({
   useEffect(() => {
     const buildQr = async () => {
       try {
-        const urlAddress = `${window.location.origin}/join?pin=${pin}&game=pictionary`;
+        const { buildJoinUrl } = await import("../../services/joinUrlService");
+        const urlAddress = await buildJoinUrl({ pin, game: "pictionary" });
         const qrSvg = await QRCode.toDataURL(urlAddress, { width: 140, margin: 1 });
         setQrUrl(qrSvg);
       } catch (err) {

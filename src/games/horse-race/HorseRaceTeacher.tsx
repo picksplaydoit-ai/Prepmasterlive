@@ -57,6 +57,7 @@ export default function HorseRaceTeacher({
   const [playedQuestionsLog, setPlayedQuestionsLog] = useState<any[]>([]);
   const [raceMovementLog, setRaceMovementLog] = useState<any[]>([]);
   const [highlightedLanes, setHighlightedLanes] = useState<string[]>([]);
+  const [lobbyUrl, setLobbyUrl] = useState<string>("");
 
   const timerRef = useRef<any>(null);
   const isPausedRef = useRef<boolean>(isPaused);
@@ -67,9 +68,13 @@ export default function HorseRaceTeacher({
 
   // Generate QR code and initialize socket room
   useEffect(() => {
-    const url = `${window.location.origin}?pin=${pin}`;
-    QRCode.toDataURL(url, { width: 300, margin: 1 }, (err, qrUrl) => {
-      if (!err) setQrCodeUrl(qrUrl);
+    import("../../services/joinUrlService").then(({ buildJoinUrl }) => {
+      buildJoinUrl({ pin, game: "horse_race" }).then(url => {
+        setLobbyUrl(url);
+        QRCode.toDataURL(url, { width: 300, margin: 1 }, (err, qrUrl) => {
+          if (!err) setQrCodeUrl(qrUrl);
+        });
+      });
     });
 
     // Notify server of new Horse Race session
@@ -597,7 +602,7 @@ export default function HorseRaceTeacher({
             <div>
               <p className="text-xs text-slate-400 font-sans">Escanear QR o ingresar en el móvil:</p>
               <p className="text-lg font-black text-slate-800 font-sans tracking-tight">
-                {window.location.origin}
+                {lobbyUrl || window.location.origin}
               </p>
             </div>
 

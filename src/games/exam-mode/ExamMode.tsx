@@ -40,6 +40,11 @@ interface StudentExamProgress {
   status?: string;
   autoSubmitted?: boolean;
   tabChangeCount?: number;
+  focusLossCount?: number;
+  leaveAttemptCount?: number;
+  timeAwaySeconds?: number;
+  examStartTime?: string;
+  examEndTime?: string;
   disconnectCount?: number;
   reconnectCount?: number;
   lastEventName?: string;
@@ -57,7 +62,6 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
   const [customMinutes, setCustomMinutes] = useState<string>("");
   
   // Direct Join states (2.1.2)
-  const [networkInfo, setNetworkInfo] = useState<{ localIp: string; port: number; localUrl: string } | null>(null);
   const [joinUrlUsed, setJoinUrlUsed] = useState<string>("");
   const [isIpDetected, setIsIpDetected] = useState<boolean>(true);
   const [sessionQrUrl, setSessionQrUrl] = useState<string>("");
@@ -65,49 +69,18 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
   const [copiedUrl, setCopiedUrl] = useState(false);
 
   useEffect(() => {
-    fetch("/api/network-info")
-      .then(res => {
-        if (res.ok) return res.json();
-        throw new Error("Network API failed");
-      })
-      .then(data => {
-        setNetworkInfo(data);
-      })
-      .catch(err => {
-        console.error("Error fetching network-info in exam mode:", err);
+    import("../../services/joinUrlService").then(({ buildJoinUrl }) => {
+      buildJoinUrl({ pin, game: "exam_mode" }).then(url => {
+        setJoinUrlUsed(url);
+        setIsIpDetected(url.includes("192.") || url.includes("10.") || url.includes("172.") || !url.includes("localhost"));
+        QRCode.toDataURL(url, { width: 405, margin: 1 }, (err, qrUrl) => {
+          if (!err) {
+            setSessionQrUrl(qrUrl);
+          }
+        });
       });
-  }, []);
-
-  useEffect(() => {
-    const host = window.location.hostname;
-    const isPrivateIp = host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.") || host.startsWith("169.254.");
-    const isLocalhost = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
-    const isCloudEnv = !isLocalhost && !isPrivateIp;
-
-    let url = "";
-    if (isCloudEnv) {
-      url = `${window.location.origin}/join?pin=${pin}&game=exam_mode`;
-      setIsIpDetected(true);
-    } else if (networkInfo && networkInfo.localIp) {
-      url = `http://${networkInfo.localIp}:${networkInfo.port}/join?pin=${pin}&game=exam_mode`;
-      setIsIpDetected(true);
-    } else {
-      if (host && host !== "localhost" && host !== "127.0.0.1") {
-        url = `${window.location.origin}/join?pin=${pin}&game=exam_mode`;
-        setIsIpDetected(true);
-      } else {
-        setIsIpDetected(false);
-        url = `http://[REVISA_CONEXION_WIFI]:3000/join?pin=${pin}&game=exam_mode`;
-      }
-    }
-    setJoinUrlUsed(url);
-
-    QRCode.toDataURL(url, { width: 405, margin: 1 }, (err, qrUrl) => {
-      if (!err) {
-        setSessionQrUrl(qrUrl);
-      }
     });
-  }, [pin, networkInfo]);
+  }, [pin]);
 
   const [examStarted, setExamStarted] = useState(false);
   const [examStatus, setExamStatus] = useState<'lobby' | 'ongoing' | 'completed'>('lobby');
@@ -164,6 +137,11 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
                   status: item.status || "Pendiente",
                   autoSubmitted: item.autoSubmitted || false,
                   tabChangeCount: item.tabChangeCount || 0,
+                  focusLossCount: item.focusLossCount || 0,
+                  leaveAttemptCount: item.leaveAttemptCount || 0,
+                  timeAwaySeconds: item.timeAwaySeconds || 0,
+                  examStartTime: item.examStartTime || "",
+                  examEndTime: item.examEndTime || "",
                   disconnectCount: item.disconnectCount || 0,
                   reconnectCount: item.reconnectCount || 0,
                   lastEventName: item.lastEventName || "",
@@ -394,28 +372,33 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
         "Estado": currentStatus,
         "Tiempo límite del examen": infoLimite,
         "Tiempo usado": `${student.timeTakenSeconds}s`,
-        "Estado por tiempo": estadoPorTiempo
+        "Estado por tiempo": estadoPorTiempo,
+        "Cambios de pestaña": student.tabChangeCount || 0,
+        "Pérdidas de foco": student.focusLossCount || 0,
+        "Minimizaciones": student.tabChangeCount || 0,
+        "Intentos de abandono": student.leaveAttemptCount || 0,
+        "Tiempo total fuera del examen (s)": student.timeAwaySeconds || 0,
+        "Hora de inicio": student.examStartTime || "N/A",
+        "Hora de finalización": student.examEndTime || "N/A",
+        "Nivel de riesgo": (student.tabChangeCount || 0) + (student.focusLossCount || 0) + (student.leaveAttemptCount || 0) > 0 ? "Alto" : "Bajo"
       };
     });
 
     // Generate sheet & workbook
     const ws = XLSX.utils.json_to_sheet(rows);
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Modo Examen");
+    XLSX.utils.book_append_sheet(wb, ws, "Resultados");
 
     // Add events sheet
     const eventsRows = examEventsList.map((ev, idx) => ({
       "No.": idx + 1,
       "Alumno": ev.alumno || ev.name,
-      "PlayerId": ev.playerId,
-      "Evento": ev.evento,
-      "Descripción": ev.descripcion || ev.description,
       "Fecha y hora": ev.fechaHora || ev.timestamp,
-      "Reactivo actual": ev.reactivoActual || ev.currentQuestion || "N/A",
-      "Estado del examen": ev.examStatus || ev.status || "En progreso"
+      "Tipo de evento": ev.evento,
+      "Descripción": ev.descripcion || ev.description
     }));
     const wsEvents = XLSX.utils.json_to_sheet(eventsRows);
-    XLSX.utils.book_append_sheet(wb, wsEvents, "Eventos de examen");
+    XLSX.utils.book_append_sheet(wb, wsEvents, "Registro de Integridad");
 
     // Trigger local offline download
     const fileName = `Reporte_Examen_PIN_${pin}_${quiz.title.replace(/\s+/g, "_")}.xlsx`;
@@ -813,7 +796,10 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
             {(Object.values(examProgress) as StudentExamProgress[]).map(p => {
               const tabChanges = p.tabChangeCount || 0;
               const disconnects = p.disconnectCount || 0;
-              const totalEvents = tabChanges + disconnects;
+              const focusLosses = p.focusLossCount || 0;
+              const leaveAttempts = p.leaveAttemptCount || 0;
+              const totalEvents = tabChanges + disconnects + focusLosses + leaveAttempts;
+              const timeAway = p.timeAwaySeconds || 0;
               
               let badgeColor = "bg-emerald-55 text-emerald-800 border-emerald-200";
               let badgeText = "Verde: Seguro";
@@ -842,16 +828,16 @@ export default function ExamMode({ quiz, pin, players, teams, onBackToMenu, conn
 
                   <div className="grid grid-cols-2 gap-2 text-[11px] font-sans">
                     <div className="space-y-0.5 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
-                      <span className="text-slate-450 font-bold block text-[10px]">Cambios de Pestaña:</span>
-                      <strong className={`font-mono text-xs ${tabChanges > 0 ? "text-rose-600 font-black" : "text-slate-700"}`}>
-                        {tabChanges}
+                      <span className="text-slate-450 font-bold block text-[10px]">Pestaña/Foco/Desconex:</span>
+                      <strong className={`font-mono text-xs ${totalEvents > 0 ? "text-rose-600 font-black" : "text-slate-700"}`}>
+                        {totalEvents}
                       </strong>
                     </div>
 
                     <div className="space-y-0.5 bg-slate-50 p-1.5 rounded-lg border border-slate-100">
-                      <span className="text-slate-455 font-bold block text-[10px]">Desconexiones:</span>
-                      <strong className={`font-mono text-xs ${disconnects > 0 ? "text-rose-600 font-black" : "text-slate-700"}`}>
-                        {disconnects}
+                      <span className="text-slate-455 font-bold block text-[10px]">Tiempo Fuera (s):</span>
+                      <strong className={`font-mono text-xs ${timeAway > 0 ? "text-amber-600 font-black" : "text-slate-700"}`}>
+                        {timeAway}s
                       </strong>
                     </div>
                   </div>

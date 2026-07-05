@@ -20,10 +20,13 @@ export default function HeadbanzTeacher({ socket, pin, config, bankTitle, words,
 
   // Generate QR for connecting local clients
   useEffect(() => {
-    const studentUrl = `${window.location.origin}/student?pin=${pin}`;
-    QRCode.toDataURL(studentUrl, { margin: 2, scale: 5 })
-      .then((url) => setQrCodeUrl(url))
-      .catch((err) => console.error("Error generating QR:", err));
+    import("../../services/joinUrlService").then(({ buildJoinUrl }) => {
+      buildJoinUrl({ pin, game: "headbanz" }).then(studentUrl => {
+        QRCode.toDataURL(studentUrl, { margin: 2, scale: 5 })
+          .then((url) => setQrCodeUrl(url))
+          .catch((err) => console.error("Error generating QR:", err));
+      });
+    });
   }, [pin]);
 
   // Handle socket.io state synchronizations

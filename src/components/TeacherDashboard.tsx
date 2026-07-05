@@ -117,36 +117,19 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
   useEffect(() => {
     if (activePin && activeGameType) {
-      const host = window.location.hostname;
-      const isPrivateIp = host.startsWith("192.168.") || host.startsWith("10.") || host.startsWith("172.") || host.startsWith("169.254.");
-      const isLocalhost = host === "localhost" || host === "127.0.0.1" || host.endsWith(".local");
-      const isCloudEnv = !isLocalhost && !isPrivateIp;
-
-      let url = "";
-      if (isCloudEnv) {
-        url = `${window.location.origin}/join?pin=${activePin}&game=${activeGameType}`;
-        setIsIpDetected(true);
-      } else if (networkInfo && networkInfo.localIp) {
-        url = `http://${networkInfo.localIp}:${networkInfo.port}/join?pin=${activePin}&game=${activeGameType}`;
-        setIsIpDetected(true);
-      } else {
-        if (host && host !== "localhost" && host !== "127.0.0.1") {
-          url = `${window.location.origin}/join?pin=${activePin}&game=${activeGameType}`;
-          setIsIpDetected(true);
-        } else {
-          setIsIpDetected(false);
-          url = `http://[REVISA_CONEXION_WIFI]:3000/join?pin=${activePin}&game=${activeGameType}`;
-        }
-      }
-      setJoinUrlUsed(url);
-
-      QRCode.toDataURL(url, { width: 405, margin: 1 }, (err, qrUrl) => {
-        if (!err) {
-          setSessionQrUrl(qrUrl);
-        }
+      import("../services/joinUrlService").then(({ buildJoinUrl }) => {
+        buildJoinUrl({ pin: activePin, game: activeGameType }).then(url => {
+          setJoinUrlUsed(url);
+          setIsIpDetected(url.includes("192.") || url.includes("10.") || url.includes("172.") || !url.includes("localhost"));
+          QRCode.toDataURL(url, { width: 405, margin: 1 }, (err, qrUrl) => {
+            if (!err) {
+              setSessionQrUrl(qrUrl);
+            }
+          });
+        });
       });
     }
-  }, [activePin, activeGameType, networkInfo]);
+  }, [activePin, activeGameType]);
 
   // New states for match results and export metrics
   const [gameResultsData, setGameResultsData] = useState<any | null>(null);
@@ -247,13 +230,11 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
       console.error("Error al obtener la información de IP local:", err);
     }
     try {
-      const res = await fetch("/api/network-info");
-      if (res.ok) {
-        const data = await res.json();
-        setNetworkInfo(data);
-      }
+      const { getNetworkInfo } = await import("../services/joinUrlService");
+      const data = await getNetworkInfo();
+      if (data) setNetworkInfo(data);
     } catch (err) {
-      console.error("Error al obtener /api/network-info:", err);
+      console.error("Error al obtener network-info:", err);
     }
     try {
       const res = await fetch("/api/electron/status");
@@ -1069,12 +1050,12 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
                       <div>
                         <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Dirección Local:</span>
                         <span className="font-bold text-indigo-700 truncate block select-all" id="lobby-local-dir-text">
-                          {networkInfo?.localUrl || connInfo?.appUrl || `${window.location.origin}`}
+                          {joinUrlUsed || networkInfo?.localUrl || connInfo?.appUrl || `${window.location.origin}`}
                         </span>
                       </div>
                       <button
                         onClick={() => {
-                          const url = networkInfo?.localUrl || connInfo?.appUrl || `${window.location.origin}`;
+                          const url = joinUrlUsed || networkInfo?.localUrl || connInfo?.appUrl || `${window.location.origin}`;
                           navigator.clipboard.writeText(url);
                           setCopiedUrl(true);
                           setTimeout(() => setCopiedUrl(false), 2000);

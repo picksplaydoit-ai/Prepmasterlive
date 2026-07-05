@@ -160,6 +160,14 @@ try {
   // Safe to ignore if column already exists
 }
 
+try {
+  db.exec("ALTER TABLE game_history ADD COLUMN examProgress TEXT");
+} catch (e) {}
+
+try {
+  db.exec("ALTER TABLE game_history ADD COLUMN examEvents TEXT");
+} catch (e) {}
+
 // Auto-migrate from any existing db.json to ensure no data loss
 function migrateFromJSON(): void {
   try {
@@ -785,9 +793,12 @@ function saveGameSessionHistory(session: GameSession): void {
     const sortedPlayers = Object.values(session.players).sort((a, b) => b.score - a.score);
     const scoresJSON = JSON.stringify(sortedPlayers);
 
+    const examProgressJSON = JSON.stringify((session as any).examProgress || {});
+    const examEventsJSON = JSON.stringify((session as any).examEvents || []);
+
     const insertHistory = db.prepare(`
-      INSERT OR REPLACE INTO game_history (id, questionnaire, date, players, answers, scores, topicSummary, game_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO game_history (id, questionnaire, date, players, answers, scores, topicSummary, game_type, examProgress, examEvents)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     insertHistory.run(
@@ -798,7 +809,9 @@ function saveGameSessionHistory(session: GameSession): void {
       answersJSON,
       scoresJSON,
       JSON.stringify(finalTopicSummary),
-      (session as any).gameType || "quiz_live"
+      (session as any).gameType || "quiz_live",
+      examProgressJSON,
+      examEventsJSON
     );
 
     console.log(`[SQLite] Historial guardado para partida PIN ${pin}`);
@@ -1667,7 +1680,9 @@ app.get("/api/session-results/:pin", (req, res) => {
         date: row.date,
         topicSummary: JSON.parse(row.topicSummary),
         gameMode: q.gameMode || "individual",
-        teams: q.teams || []
+        teams: q.teams || [],
+        examProgress: row.examProgress ? JSON.parse(row.examProgress) : null,
+        examEvents: row.examEvents ? JSON.parse(row.examEvents) : null
       });
       return;
     }
@@ -3055,16 +3070,22 @@ io.on("connection", (socket: Socket) => {
         const answers = payload.answers || {};
         
         let status = "En progreso";
+        const prevProgress = (session as any).examProgress[studentPlayerId] || {};
+        const issues = (prevProgress.tabChangeCount || 0) + (prevProgress.focusLossCount || 0) + (prevProgress.leaveAttemptCount || 0);
+
         if (completed) {
-          status = "Terminado";
+          status = issues > 0 ? "Completado (con advertencias)" : "Completado (Limpio)";
         } else if (solvedCount === 0) {
           status = "Pendiente";
+        } else {
+          status = issues > 0 ? "En progreso (con advertencias)" : "En progreso";
         }
-        
+
         const totalQs = session.questions ? session.questions.length : (payload.totalQuestions || 0);
         const percentage = totalQs > 0 ? Math.round((correctCount / totalQs) * 100) : 0;
         
         (session as any).examProgress[studentPlayerId] = {
+          ...prevProgress,
           playerId: studentPlayerId,
           socketId: socket.id,
           name: payload.name || (session.players[socket.id] ? session.players[socket.id].name : "Alumno"),
@@ -3079,6 +3100,10 @@ io.on("connection", (socket: Socket) => {
           autoSubmitted: !!payload.autoSubmitted,
           lastUpdated: Date.now()
         };
+
+        if (completed && !prevProgress.examEndTime) {
+          (session as any).examProgress[studentPlayerId].examEndTime = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
 
         const playerObj = Object.values(session.players).find(p => p.playerId === studentPlayerId) || session.players[socket.id];
         if (playerObj) {
@@ -3130,15 +3155,44 @@ io.on("connection", (socket: Socket) => {
             timeTakenSeconds: 0,
             status: "En progreso",
             answers: {},
-            lastUpdated: Date.now()
+            lastUpdated: Date.now(),
+            // Integrity tracking
+            tabChangeCount: 0,
+            focusLossCount: 0,
+            leaveAttemptCount: 0,
+            timeAwaySeconds: 0,
+            examStartTime: new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+            examEndTime: null
           };
         }
         
         const prog = (session as any).examProgress[studentPlayerId];
-        prog.tabChangeCount = (prog.tabChangeCount || 0) + 1;
+        
+        if (eventType === "Cambio de pestaña") {
+          prog.tabChangeCount = (prog.tabChangeCount || 0) + 1;
+        } else if (eventType === "Pérdida de foco") {
+          prog.focusLossCount = (prog.focusLossCount || 0) + 1;
+        } else if (eventType === "Recarga o cierre") {
+          prog.leaveAttemptCount = (prog.leaveAttemptCount || 0) + 1;
+        } else if (eventType === "Regreso al examen") {
+          if (payload.timeAwayMs) {
+            prog.timeAwaySeconds = (prog.timeAwaySeconds || 0) + Math.round(payload.timeAwayMs / 1000);
+          }
+        }
+
+        // Determine general integrity status
+        const issues = (prog.tabChangeCount || 0) + (prog.focusLossCount || 0) + (prog.leaveAttemptCount || 0);
+        let examStatus = "En progreso";
+        if (prog.completed) {
+          examStatus = issues > 0 ? "Completado (con advertencias)" : "Completado (Limpio)";
+        } else {
+          examStatus = issues > 0 ? "En progreso (con advertencias)" : "En progreso";
+        }
+        prog.status = examStatus;
+        prog.examStatus = examStatus;
+
         prog.lastEventName = eventType;
         prog.lastEventTime = new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        prog.examStatus = prog.status || "En progreso";
         
         const newEvent = {
           alumno: studentName,
@@ -3147,7 +3201,8 @@ io.on("connection", (socket: Socket) => {
           descripcion: description,
           fechaHora: new Date().toLocaleDateString('es-MX') + " " + prog.lastEventTime,
           reactivoActual: reactivoLabel,
-          examStatus: prog.status || "En progreso"
+          examStatus: prog.status,
+          timeAwayMs: payload.timeAwayMs || 0
         };
         
         (session as any).examEvents.push(newEvent);

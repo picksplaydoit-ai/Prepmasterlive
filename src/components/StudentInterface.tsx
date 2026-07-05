@@ -521,8 +521,12 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
   useEffect(() => {
     if (activeGameType !== "exam" || examCompleted || !examNoticeAccepted || !joinedPin) return;
 
+    let hiddenStartTime = 0;
+    let blurStartTime = 0;
+
     const handleVisibilityChange = () => {
       if (document.hidden) {
+        hiddenStartTime = Date.now();
         socket.emit("game:player-message", {
           pin: joinedPin,
           event: "exam:register-event",
@@ -533,10 +537,26 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
           currentQuestionIndex: examCurrentQuestionIndex
         });
         setShowFocusAlert(true);
+      } else {
+        if (hiddenStartTime > 0) {
+          const timeAwayMs = Date.now() - hiddenStartTime;
+          hiddenStartTime = 0;
+          socket.emit("game:player-message", {
+            pin: joinedPin,
+            event: "exam:register-event",
+            playerId: playerInfo?.playerId || safeStorage.getItem("prepmaster_player_id") || "random_player",
+            name: playerInfo?.name || name,
+            eventType: "Regreso al examen",
+            description: "El alumno regresó a la pestaña del examen.",
+            timeAwayMs,
+            currentQuestionIndex: examCurrentQuestionIndex
+          });
+        }
       }
     };
 
     const handleWindowBlur = () => {
+      blurStartTime = Date.now();
       socket.emit("game:player-message", {
         pin: joinedPin,
         event: "exam:register-event",
@@ -547,6 +567,23 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
         currentQuestionIndex: examCurrentQuestionIndex
       });
       setShowFocusAlert(true);
+    };
+
+    const handleWindowFocus = () => {
+      if (blurStartTime > 0) {
+        const timeAwayMs = Date.now() - blurStartTime;
+        blurStartTime = 0;
+        socket.emit("game:player-message", {
+          pin: joinedPin,
+          event: "exam:register-event",
+          playerId: playerInfo?.playerId || safeStorage.getItem("prepmaster_player_id") || "random_player",
+          name: playerInfo?.name || name,
+          eventType: "Regreso al examen",
+          description: "El alumno recuperó el foco de la ventana.",
+          timeAwayMs,
+          currentQuestionIndex: examCurrentQuestionIndex
+        });
+      }
     };
 
     const handleBeforeUnload = () => {
@@ -563,11 +600,13 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("blur", handleWindowBlur);
+    window.addEventListener("focus", handleWindowFocus);
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("blur", handleWindowBlur);
+      window.removeEventListener("focus", handleWindowFocus);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [activeGameType, examCompleted, examNoticeAccepted, joinedPin, playerInfo, name, examCurrentQuestionIndex]);
