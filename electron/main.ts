@@ -10,6 +10,7 @@ const _dirname = typeof __dirname !== "undefined" ? __dirname : path.dirname(fil
 
 let serverProcess: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
+let backendStartTime: number = 0;
 
 const isDev = process.env.NODE_ENV === "development" || !app.isPackaged;
 
@@ -27,6 +28,9 @@ function startBackend() {
     PREPMASTER_DB_PATH: dbPath,
     PORT: "3000"
   };
+
+  backendStartTime = Date.now();
+  console.log(`[${new Date(backendStartTime).toISOString()}] Hora de inicio del backend...`);
 
   // Prefer loading the compiled CJS server bundle if it exists (very fast & stable, no runtime TS compilation/Vite overhead)
   const compiledServerPath = path.join(_dirname, "../dist/server.cjs");
@@ -48,27 +52,60 @@ function startBackend() {
     return;
   }
 
-  serverProcess.on("exit", (code) => {
-    console.log(`El servidor Express terminó con código: ${code}`);
+  serverProcess.on("exit", (code, signal) => {
+    console.log(`El servidor Express terminó con código: ${code} y señal: ${signal}`);
   });
 }
 
-function waitForServer(url: string, timeoutMs: number): Promise<void> {
+function waitForServer(url: string, timeoutMs: number, serverProc: ChildProcess | null): Promise<void> {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
-    const interval = 250; // Check every 250ms
+    const intervalMs = 250; // Check every 250ms
+    let timer: NodeJS.Timeout | null = null;
+    let isFinished = false;
+
+    const onExit = (code: number | null, signal: string | null) => {
+      if (isFinished) return;
+      isFinished = true;
+      if (timer) clearTimeout(timer);
+      reject(new Error(`El proceso del servidor backend terminó inesperadamente (código ${code}, señal ${signal}) antes de estar listo.`));
+    };
+
+    if (serverProc) {
+      serverProc.on("exit", onExit);
+    }
+
+    function finish(err?: Error) {
+      if (isFinished) return;
+      isFinished = true;
+      if (timer) clearTimeout(timer);
+      if (serverProc) serverProc.removeListener("exit", onExit);
+      
+      if (err) reject(err);
+      else resolve();
+    }
 
     function check() {
+      if (isFinished) return;
+
       const req = http.get(url, (res) => {
-        // Any response (even 451, 404, etc.) means the server is online and responding!
-        resolve();
+        if (res.statusCode === 200) {
+          finish();
+        } else {
+          if (Date.now() - startTime > timeoutMs) {
+            finish(new Error(`Tiempo de espera agotado para el servidor local en ${url}: Respondió con código HTTP ${res.statusCode} en lugar de 200.`));
+          } else {
+            timer = setTimeout(check, intervalMs);
+          }
+        }
       });
 
       req.on("error", (err) => {
+        if (isFinished) return;
         if (Date.now() - startTime > timeoutMs) {
-          reject(new Error(`Tiempo de espera agotado para el servidor local en ${url}: ${err.message}`));
+          finish(new Error(`Tiempo de espera agotado (${timeoutMs}ms) intentando conectar a ${url}. Detalle: ${err.message}`));
         } else {
-          setTimeout(check, interval);
+          timer = setTimeout(check, intervalMs);
         }
       });
 
@@ -115,10 +152,13 @@ app.whenReady().then(() => {
   startBackend();
 
   const serverUrl = "http://localhost:3000";
-  const timeoutLimit = 15000; // 15 seconds limit
+  const timeoutLimit = 30000; // 30 seconds limit
 
-  waitForServer(serverUrl, timeoutLimit)
+  waitForServer(serverUrl, timeoutLimit, serverProcess)
     .then(() => {
+      const respondedTime = Date.now();
+      console.log(`[${new Date(respondedTime).toISOString()}] Hora en que el puerto respondió.`);
+      console.log(`Tiempo total de arranque en milisegundos: ${respondedTime - backendStartTime}ms`);
       createWindow();
     })
     .catch((err) => {
