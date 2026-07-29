@@ -244,54 +244,6 @@ export function playGameSound(sound: string) {
         break;
       }
 
-      // Conecta 4 Educativo Sounds
-      case "conecta4_ficha": {
-        // Descending bubble drop + thud
-        const duration = 0.45;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = "sine";
-        osc.frequency.setValueAtTime(600, now);
-        osc.frequency.exponentialRampToValueAtTime(150, now + 0.35);
-        gain.gain.setValueAtTime(0.15, now);
-        gain.gain.linearRampToValueAtTime(0.01, now + duration);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now);
-        osc.stop(now + duration);
-
-        // Thud knock sound
-        playTone(ctx, 90, "triangle", 0.32, 0.15, 0.05);
-        break;
-      }
-
-      case "conecta4_ganar_turno": {
-        // Fast cheerful ascending chime
-        playTone(ctx, 392.00, "sine", 0, 0.12, 0.05); // G4
-        playTone(ctx, 523.25, "sine", 0.06, 0.12, 0.05); // C5
-        playTone(ctx, 659.25, "sine", 0.12, 0.12, 0.05); // E5
-        playTone(ctx, 783.99, "sine", 0.18, 0.25, 0.1); // G5
-        break;
-      }
-
-      case "conecta4_linea": {
-        // Sparkling win shimmer
-        for (let i = 0; i < 6; i++) {
-          playTone(ctx, 800 + i * 150, "sine", i * 0.05, 0.2, 0.08);
-        }
-        break;
-      }
-
-      case "conecta4_victoria": {
-        // Grand victory fanfare
-        const notes = [261.63, 329.63, 392.00, 523.25, 659.25, 783.99, 1046.50];
-        notes.forEach((freq, i) => {
-          playTone(ctx, freq, "sine", i * 0.08, 0.4, 0.15);
-        });
-        playTone(ctx, 1318.51, "sine", 0.56, 0.8, 0.3); // E6 sparkle
-        break;
-      }
-
       // Universal Buzzer Sounds (Prepmaster 2.6.0)
       case "buzzer_start": {
         playTone(ctx, 440.00, "triangle", 0, 0.15, 0.05); // A4

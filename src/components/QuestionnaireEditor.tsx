@@ -19,7 +19,7 @@ const DEFAULT_QUESTION: Question = {
 export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: QuestionnaireEditorProps) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [gameType, setGameType] = useState<'quiz_live' | 'exam_mode' | 'mexicanos' | 'jeopardy'>("quiz_live");
+  const [gameType, setGameType] = useState<'quiz_live' | 'exam_mode' | 'family_feud' | 'jeopardy'>("quiz_live");
   const [questions, setQuestions] = useState<Question[]>([
     { ...DEFAULT_QUESTION, id: "q_temp_1" }
   ]);
@@ -41,7 +41,7 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
   }, [editingQuiz]);
 
   // Handle Game Type Change – automatically fill appropriate presets
-  const handleGameTypeChange = (newType: 'quiz_live' | 'exam_mode' | 'mexicanos' | 'jeopardy') => {
+  const handleGameTypeChange = (newType: 'quiz_live' | 'exam_mode' | 'family_feud' | 'jeopardy') => {
     setGameType(newType);
     setError(null);
     
@@ -62,7 +62,7 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
           alternatives: q.alternatives || [],
           correctShortAnswer: q.correctShortAnswer || ""
         };
-      } else if (newType === 'mexicanos') {
+      } else if (newType === 'family_feud') {
         const mxOpts = q.options.length > 0 && q.options[0].includes("|") 
           ? q.options 
           : ["Respuesta A|40", "Respuesta B|25", "Respuesta C|15"];
@@ -101,7 +101,7 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
       newQ.feedback = "";
       newQ.correctShortAnswer = "";
       newQ.alternatives = [];
-    } else if (gameType === 'mexicanos') {
+    } else if (gameType === 'family_feud') {
       newQ.options = ["Respuesta 1|40|", "Respuesta 2|25|", "Respuesta 3|15|"];
       newQ.round = 1;
     } else if (gameType === 'jeopardy') {
@@ -188,8 +188,8 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
     setQuestions(copy);
   };
 
-  // 100 Mexicanos Dijeron helpers
-  const parseMexicanosAnswers = (options: string[]) => {
+  // 100 Estudiantes Dijeron helpers
+  const parseFamilyFeudAnswers = (options: string[]) => {
     const parsed = options.map(opt => {
       if (!opt) return { text: "", points: 10, synonyms: "" };
       if (opt.includes("|")) {
@@ -205,9 +205,9 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
     return parsed;
   };
 
-  const handleMexicanosAnswerChange = (qIdx: number, ansIdx: number, field: 'text' | 'points' | 'synonyms', val: any) => {
+  const handleFamilyFeudAnswerChange = (qIdx: number, ansIdx: number, field: 'text' | 'points' | 'synonyms', val: any) => {
     const copy = [...questions];
-    const list = parseMexicanosAnswers(copy[qIdx].options || []);
+    const list = parseFamilyFeudAnswers(copy[qIdx].options || []);
     
     // Ensure slot exists
     while (list.length <= ansIdx) {
@@ -222,17 +222,17 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
     setQuestions(copy);
   };
 
-  const handleAddMexicanosAnswer = (qIdx: number) => {
+  const handleAddFamilyFeudAnswer = (qIdx: number) => {
     const copy = [...questions];
-    const list = parseMexicanosAnswers(copy[qIdx].options || []);
+    const list = parseFamilyFeudAnswers(copy[qIdx].options || []);
     list.push({ text: "", points: 10, synonyms: "" });
     copy[qIdx].options = list.map(item => `${item.text}|${item.points}|${item.synonyms}`);
     setQuestions(copy);
   };
 
-  const handleRemoveMexicanosAnswer = (qIdx: number, ansIdx: number) => {
+  const handleRemoveFamilyFeudAnswer = (qIdx: number, ansIdx: number) => {
     const copy = [...questions];
-    const list = parseMexicanosAnswers(copy[qIdx].options || []);
+    const list = parseFamilyFeudAnswers(copy[qIdx].options || []);
     if (list.length <= 3) {
       setError("100 Estudiantes requiere al menos 3 respuestas.");
       return;
@@ -305,14 +305,14 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
           }
         }
       }
-    } else if (gameType === "mexicanos") {
+    } else if (gameType === "family_feud") {
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
         if (!q.text.trim()) {
           setError(`La encuesta de 100 Estudiantes #${i + 1} no tiene pregunta.`);
           return;
         }
-        const list = parseMexicanosAnswers(q.options || []);
+        const list = parseFamilyFeudAnswers(q.options || []);
         if (list.length < 3) {
           setError(`La encuesta de 100 Estudiantes #${i + 1} debe contener como mínimo 3 respuestas válidas.`);
           return;
@@ -442,7 +442,7 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
         >
           <option value="quiz_live">Quiz Live 🎯</option>
           <option value="exam_mode">Modo Examen 📝</option>
-          <option value="mexicanos">100 Estudiantes Dijeron 🧑‍🎓</option>
+          <option value="family_feud">100 Estudiantes Dijeron 🧑‍🎓</option>
           <option value="jeopardy">Jeopardy 🏆</option>
         </select>
       </div>
@@ -481,8 +481,8 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
         </div>
         
         {questions.map((q, qIdx) => {
-          // Mexicanos Answers parsed locally as state representation
-          const mxAnswers = gameType === 'mexicanos' ? parseMexicanosAnswers(q.options || []) : [];
+          // FamilyFeud Answers parsed locally as state representation
+          const mxAnswers = gameType === 'family_feud' ? parseFamilyFeudAnswers(q.options || []) : [];
           
           return (
             <div key={q.id || qIdx} className="bg-slate-50/50 border border-slate-200/80 rounded-2xl p-5 sm:p-6 space-y-5 relative shadow-sm" id={`question-card-${qIdx}`}>
@@ -772,7 +772,7 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
               )}
 
               {/* === 100 ESTUDIANTES DIJERON === */}
-              {gameType === 'mexicanos' && (
+              {gameType === 'family_feud' && (
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
@@ -809,7 +809,7 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
                       {mxAnswers.length < 10 && (
                         <button
                           type="button"
-                          onClick={() => handleAddMexicanosAnswer(qIdx)}
+                          onClick={() => handleAddFamilyFeudAnswer(qIdx)}
                           className="text-[10px] text-indigo-700 font-extrabold hover:underline"
                         >
                           + Añadir Respuesta
@@ -825,26 +825,26 @@ export default function QuestionnaireEditor({ editingQuiz, onBack, onSaved }: Qu
                             type="text"
                             placeholder="Respuesta visible en tablero (Ej. Toalla)"
                             value={ans.text}
-                            onChange={(e) => handleMexicanosAnswerChange(qIdx, aIdx, 'text', e.target.value)}
+                            onChange={(e) => handleFamilyFeudAnswerChange(qIdx, aIdx, 'text', e.target.value)}
                             className="bg-transparent text-xs font-bold outline-none focus:ring-1 focus:ring-indigo-300 rounded px-1 flex-1 w-full"
                           />
                           <input
                             type="number"
                             placeholder="Puntos"
                             value={ans.points}
-                            onChange={(e) => handleMexicanosAnswerChange(qIdx, aIdx, 'points', e.target.value)}
+                            onChange={(e) => handleFamilyFeudAnswerChange(qIdx, aIdx, 'points', e.target.value)}
                             className="bg-slate-50 text-xs font-mono font-bold outline-none rounded border border-slate-200 text-center w-20 py-1"
                           />
                           <input
                             type="text"
                             placeholder="Sinónimos/Alternativas separados por comas (Ej. toallas, sabana playera)"
                             value={ans.synonyms}
-                            onChange={(e) => handleMexicanosAnswerChange(qIdx, aIdx, 'synonyms', e.target.value)}
+                            onChange={(e) => handleFamilyFeudAnswerChange(qIdx, aIdx, 'synonyms', e.target.value)}
                             className="bg-transparent text-[11px] outline-none focus:ring-1 focus:ring-indigo-300 rounded px-1 flex-1 w-full text-slate-500"
                           />
                           <button
                             type="button"
-                            onClick={() => handleRemoveMexicanosAnswer(qIdx, aIdx)}
+                            onClick={() => handleRemoveFamilyFeudAnswer(qIdx, aIdx)}
                             className="text-rose-500 hover:text-rose-600 disabled:opacity-20 self-end sm:self-auto cursor-pointer"
                             disabled={mxAnswers.length <= 3}
                           >

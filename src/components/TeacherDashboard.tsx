@@ -10,22 +10,19 @@ import { Questionnaire, Player, GameSession, PlayerAnswersCount, Team } from "..
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
 import { AvatarRenderer, getAvatarById } from "./AvatarCatalog";
-import Mexicanos from "../games/100-mexicanos/Mexicanos";
+import FamilyFeud from "../games/family-feud/FamilyFeud";
 import JeopardyGame from "../games/jeopardy/JeopardyGame";
 import ExamMode from "../games/exam-mode/ExamMode";
 import NetworkDiagnostic from "./NetworkDiagnostic";
 import QRCode from "qrcode";
 import { playGameSound } from "../lib/sound";
 import { GAMES_REGISTRY } from "../gamesRegistry";
-import PictionaryGame from "../games/pictionary/PictionaryGame";
-import HorseRaceGame from "../games/horse-race/HorseRaceGame";
-import HeadbanzGame from "../games/headbanz/HeadbanzGame";
-import Conecta4Game from "../games/conecta4/Conecta4Game";
+
 
 interface TeacherDashboardProps {
   onCreateNew: () => void;
   onEdit: (quiz: Questionnaire) => void;
-  onImport: (gameType?: 'quiz_live' | 'exam_mode' | 'mexicanos' | 'jeopardy') => void;
+  onImport: (gameType?: 'quiz_live' | 'exam_mode' | 'family_feud' | 'jeopardy') => void;
 }
 
 interface ConnectionInfo {
@@ -50,9 +47,9 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
   const [bankCounts, setBankCounts] = useState<{
     quiz_live: number;
     exam_mode: number;
-    mexicanos: number;
+    family_feud: number;
     jeopardy: number;
-  }>({ quiz_live: 0, exam_mode: 0, mexicanos: 0, jeopardy: 0 });
+  }>({ quiz_live: 0, exam_mode: 0, family_feud: 0, jeopardy: 0 });
   
   // Connection details retrieved from server
   const [connInfo, setConnInfo] = useState<ConnectionInfo | null>(null);
@@ -96,8 +93,8 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
   ]);
 
   // Platform multi-game modes (2.0.0)
-  const [activeGameType, setActiveGameType] = useState<'quiz_live' | 'mexicanos' | 'jeopardy' | 'exam'>('quiz_live');
-  const [hostingGameType, setHostingGameType] = useState<'quiz_live' | 'mexicanos' | 'jeopardy' | 'exam'>('quiz_live');
+  const [activeGameType, setActiveGameType] = useState<'quiz_live' | 'family_feud' | 'jeopardy' | 'exam'>('quiz_live');
+  const [hostingGameType, setHostingGameType] = useState<'quiz_live' | 'family_feud' | 'jeopardy' | 'exam'>('quiz_live');
   const [selectedDashboardGame, setSelectedDashboardGame] = useState<string | null>(null);
   const [activeQuiz, setActiveQuiz] = useState<Questionnaire | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string>("Todos");
@@ -182,7 +179,7 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
       const res = await fetch("/api/questionnaires");
       if (res.ok) {
         const data = await res.json();
-        const counts = { quiz_live: 0, exam_mode: 0, mexicanos: 0, jeopardy: 0 };
+        const counts = { quiz_live: 0, exam_mode: 0, family_feud: 0, jeopardy: 0 };
         data.forEach((q: any) => {
           const type = q.game_type || "quiz_live";
           if (type in counts) {
@@ -201,7 +198,7 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
       setLoading(true);
       let queryParam = "";
       if (selectedDashboardGame === "quiz_live") queryParam = "?game_type=quiz_live";
-      else if (selectedDashboardGame === "mexicanos") queryParam = "?game_type=mexicanos";
+      else if (selectedDashboardGame === "family_feud") queryParam = "?game_type=family_feud";
       else if (selectedDashboardGame === "jeopardy") queryParam = "?game_type=jeopardy";
       else if (selectedDashboardGame === "exam") queryParam = "?game_type=exam_mode";
 
@@ -867,9 +864,9 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
   if (activePin && gameStatus) {
     const resolvedActiveQuiz = activeQuiz || quizzes.find(q => q.title === gameTitle) || quizzes[0];
 
-    if (activeGameType === "mexicanos") {
+    if (activeGameType === "family_feud") {
       return (
-        <Mexicanos 
+        <FamilyFeud 
           quiz={resolvedActiveQuiz} 
           pin={activePin} 
           players={playersList} 
@@ -1964,7 +1961,7 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
                       setHostingGameType(mappedId as any);
                     }}
                     className={`mt-4 w-full py-2.5 text-white font-sans font-black text-xs rounded-xl shadow-xs transition-all hover:shadow-md cursor-pointer flex items-center justify-center gap-1.5 ${
-                      game.id === "mexicanos" ? "bg-amber-600 hover:bg-amber-700 hover:shadow-amber-500/10 text-slate-950" : "bg-indigo-600 hover:bg-indigo-700 hover:shadow-indigo-500/10"
+                      game.id === "family_feud" ? "bg-amber-600 hover:bg-amber-700 hover:shadow-amber-500/10 text-slate-950" : "bg-indigo-600 hover:bg-indigo-700 hover:shadow-indigo-500/10"
                     }`}
                   >
                     <span>Crear Juego</span>
@@ -2021,14 +2018,14 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
 
             <button 
               onClick={() => {
-                setSelectedDashboardGame("mexicanos");
-                setHostingGameType("mexicanos");
+                setSelectedDashboardGame("family_feud");
+                setHostingGameType("family_feud");
               }}
               className="bg-amber-50/55 border border-amber-100 hover:border-amber-400 p-4 rounded-2xl text-center cursor-pointer transition-all hover:shadow-md"
             >
               <div className="text-xl">🧑‍🎓</div>
               <p className="text-xs font-black text-amber-950 mt-1.5 leading-none">100 Estudiantes</p>
-              <span className="text-[10px] text-amber-700 font-mono font-semibold mt-2 inline-block bg-amber-100/70 px-2 py-0.5 rounded-full">{bankCounts.mexicanos} cuestionarios</span>
+              <span className="text-[10px] text-amber-700 font-mono font-semibold mt-2 inline-block bg-amber-100/70 px-2 py-0.5 rounded-full">{bankCounts.family_feud} cuestionarios</span>
             </button>
 
             <button 
@@ -2156,40 +2153,11 @@ export default function TeacherDashboard({ onCreateNew, onEdit, onImport }: Teac
     );
   }
 
-  if (selectedDashboardGame === "pictionary") {
-    return (
-      <PictionaryGame onBack={() => setSelectedDashboardGame(null)} />
-    );
-  }
-
-  if (selectedDashboardGame === "horse_race") {
-    return (
-      <HorseRaceGame onBack={() => setSelectedDashboardGame(null)} />
-    );
-  }
-
-  if (selectedDashboardGame === "headbanz") {
-    return (
-      <HeadbanzGame socket={socket} onBack={() => setSelectedDashboardGame(null)} />
-    );
-  }
-
-  if (selectedDashboardGame === "conecta_4") {
-    const pin = activePin || Math.floor(1000 + Math.random() * 9000).toString();
-    return (
-      <Conecta4Game socket={socket} pin={pin} onExit={() => setSelectedDashboardGame(null)} />
-    );
-  }
-
   const getDashboardGameName = () => {
     if (selectedDashboardGame === "quiz_live") return "Quiz Live";
-    if (selectedDashboardGame === "mexicanos") return "100 Estudiantes Dijeron";
+    if (selectedDashboardGame === "family_feud" || selectedDashboardGame === "family_feud") return "100 Estudiantes Dijeron";
     if (selectedDashboardGame === "jeopardy") return "Jeopardy";
     if (selectedDashboardGame === "exam") return "Modo Examen";
-    if (selectedDashboardGame === "pictionary") return "Pictionary Educativo";
-    if (selectedDashboardGame === "horse_race") return "Carrera de Caballos";
-    if (selectedDashboardGame === "headbanz") return "🧠 Headbanz Educativo";
-    if (selectedDashboardGame === "conecta_4") return "🔵 Conecta 4 Educativo 🔴";
     return "";
   };
 

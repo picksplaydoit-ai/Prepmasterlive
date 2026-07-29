@@ -7,10 +7,6 @@ import { socket } from "../lib/socket";
 import { Player, Team } from "../types";
 import { AvatarRenderer, AVATAR_LIST, AVATAR_CATEGORIES, getAvatarById } from "./AvatarCatalog";
 import { playGameSound } from "../lib/sound";
-import PictionaryStudent from "../games/pictionary/PictionaryStudent";
-import HorseRaceStudent from "../games/horse-race/HorseRaceStudent";
-import HeadbanzStudent from "../games/headbanz/HeadbanzStudent";
-import Conecta4Student from "../games/conecta4/Conecta4Student";
 import { useBuzzer } from "../core/BuzzerEngine";
 import StudentBuzzerPanel from "./StudentBuzzerPanel";
 import { safeStorage } from "../lib/safeStorage";
@@ -41,6 +37,14 @@ interface StudentInterfaceProps {
 }
 
 export default function StudentInterface({ initialPin, initialGame }: StudentInterfaceProps = {}) {
+  // Clear stale state if we are entering from a direct QR Code (new PIN)
+  if (initialPin && initialPin !== safeStorage.getItem("prepmaster_pin")) {
+    safeStorage.removeItem("prepmaster_pin");
+    safeStorage.removeItem("prepmaster_team_id");
+    safeStorage.removeItem("activeGameType");
+    safeStorage.removeItem("exam_progress");
+  }
+
   const [pin, setPin] = useState(() => initialPin || safeStorage.getItem("prepmaster_pin") || "");
   const [name, setName] = useState(() => safeStorage.getItem("prepmaster_name") || "");
   const [selectedAvatarId, setSelectedAvatarId] = useState(() => safeStorage.getItem("prepmaster_avatar_id") || "cult_mariachi");
@@ -52,16 +56,20 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       setPin(initialPin);
     }
   }, [initialPin]);
-  
+
+  // Priority logic for gameType
+  const [activeGameType, setActiveGameType] = useState<string>(initialGame || "quiz_live");
+
   // Team selection states
   const [roomGameMode, setRoomGameMode] = useState<'individual' | 'teams'>('individual');
   const [roomTeams, setRoomTeams] = useState<Team[]>([]);
   const [playersInSession, setPlayersInSession] = useState<Player[]>([]);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(() => safeStorage.getItem("prepmaster_team_id") || null);
-  
+
   const [joined, setJoined] = useState(false);
   const [joinedPin, setJoinedPin] = useState("");
   const [roomTitle, setRoomTitle] = useState("");
+
   
   const [playerInfo, setPlayerInfo] = useState<Player | null>(null);
   const [currentStatus, setCurrentStatus] = useState<
@@ -73,7 +81,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
   const [isConnected, setIsConnected] = useState(socket.connected);
 
   // Game Platform modular variables (2.0.0)
-  const [activeGameType, setActiveGameType] = useState<string>('quiz_live');
+  
 
   // Universal response buzzer hook
   const {
@@ -98,12 +106,12 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
     });
   };
   
-  // 100 Mexicanos states
-  const [mexicanosQuestionText, setMexicanosQuestionText] = useState("");
-  const [mexicanosAnswersCount, setMexicanosAnswersCount] = useState(0);
-  const [mexicanosBuzzerLocked, setMexicanosBuzzerLocked] = useState(false);
-  const [mexicanosBuzzedName, setMexicanosBuzzedName] = useState("");
-  const [mexicanosBuzzedTeam, setMexicanosBuzzedTeam] = useState("");
+  // 100 FamilyFeud states
+  const [family_feudQuestionText, setFamilyFeudQuestionText] = useState("");
+  const [family_feudAnswersCount, setFamilyFeudAnswersCount] = useState(0);
+  const [family_feudBuzzerLocked, setFamilyFeudBuzzerLocked] = useState(false);
+  const [family_feudBuzzedName, setFamilyFeudBuzzedName] = useState("");
+  const [family_feudBuzzedTeam, setFamilyFeudBuzzedTeam] = useState("");
   
   // Jeopardy states
   const [jeopardyCategories, setJeopardyCategories] = useState<string[]>([]);
@@ -361,26 +369,26 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       }
     });
 
-    // 100 Mexicanos Listeners
-    socket.on("mexicanos:question", (data: { questionText: string; answersCount: number }) => {
-      setActiveGameType("mexicanos");
-      setMexicanosQuestionText(data.questionText);
-      setMexicanosAnswersCount(data.answersCount);
-      setMexicanosBuzzerLocked(false);
-      setMexicanosBuzzedName("");
-      setMexicanosBuzzedTeam("");
+    // 100 FamilyFeud Listeners
+    socket.on("family_feud:question", (data: { questionText: string; answersCount: number }) => {
+      setActiveGameType("family_feud");
+      setFamilyFeudQuestionText(data.questionText);
+      setFamilyFeudAnswersCount(data.answersCount);
+      setFamilyFeudBuzzerLocked(false);
+      setFamilyFeudBuzzedName("");
+      setFamilyFeudBuzzedTeam("");
     });
 
-    socket.on("mexicanos:buzzed-state", (data: { buzzedName: string; buzzedTeam: string }) => {
-      setMexicanosBuzzerLocked(true);
-      setMexicanosBuzzedName(data.buzzedName);
-      setMexicanosBuzzedTeam(data.buzzedTeam);
+    socket.on("family_feud:buzzed-state", (data: { buzzedName: string; buzzedTeam: string }) => {
+      setFamilyFeudBuzzerLocked(true);
+      setFamilyFeudBuzzedName(data.buzzedName);
+      setFamilyFeudBuzzedTeam(data.buzzedTeam);
     });
 
-    socket.on("mexicanos:clear-buzz", () => {
-      setMexicanosBuzzerLocked(false);
-      setMexicanosBuzzedName("");
-      setMexicanosBuzzedTeam("");
+    socket.on("family_feud:clear-buzz", () => {
+      setFamilyFeudBuzzerLocked(false);
+      setFamilyFeudBuzzedName("");
+      setFamilyFeudBuzzedTeam("");
     });
 
     // Jeopardy Listeners
@@ -506,9 +514,9 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
       socket.off("question:tick");
       socket.off("player:answer-received");
       socket.off("player:question-result");
-      socket.off("mexicanos:question");
-      socket.off("mexicanos:buzzed-state");
-      socket.off("mexicanos:clear-buzz");
+      socket.off("family_feud:question");
+      socket.off("family_feud:buzzed-state");
+      socket.off("family_feud:clear-buzz");
       socket.off("jeopardy:start");
       socket.off("jeopardy:question-show");
       socket.off("jeopardy:cell-cleared");
@@ -1175,9 +1183,9 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
 
   // Overrides gameView dynamically based on the active educational game v2.0.0
   if (joined) {
-    if (activeGameType === "mexicanos") {
+    if (activeGameType === "family_feud") {
       gameView = (
-        <div className="bg-slate-900 text-white p-6 rounded-3xl border border-slate-800 text-center space-y-6 shadow-xl animate-fade-in" id="student-mexicanos-panel">
+        <div className="bg-slate-900 text-white p-6 rounded-3xl border border-slate-800 text-center space-y-6 shadow-xl animate-fade-in" id="student-family_feud-panel">
           <div className="space-y-1">
             <span className="bg-amber-500 text-slate-950 font-black text-[10px] px-2.5 py-0.5 rounded uppercase font-mono">
               🧑‍🎓 Buzzer Activo
@@ -1187,20 +1195,20 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
 
           <div className="bg-slate-950 border border-slate-850 p-4 rounded-2xl min-h-[100px] flex flex-col justify-center">
             <p className="text-sm font-bold text-slate-300 leading-normal font-sans text-center">
-              {mexicanosQuestionText || "Esperando pregunta del profesor..."}
+              {family_feudQuestionText || "Esperando pregunta del profesor..."}
             </p>
-            {mexicanosAnswersCount > 0 && (
+            {family_feudAnswersCount > 0 && (
               <span className="text-[10px] uppercase font-mono font-black text-indigo-400 mt-2">
-                Tablero con {mexicanosAnswersCount} respuestas ocultas
+                Tablero con {family_feudAnswersCount} respuestas ocultas
               </span>
             )}
           </div>
 
-          {mexicanosBuzzedName ? (
+          {family_feudBuzzedName ? (
             <div className="bg-amber-500/15 border border-amber-500/30 p-5 rounded-2xl animate-pulse space-y-1">
               <span className="text-2xl block">⚡</span>
-              <p className="text-md font-black text-amber-200">{mexicanosBuzzedName}</p>
-              {mexicanosBuzzedTeam && <p className="text-[10px] font-bold text-slate-450 uppercase font-mono">{mexicanosBuzzedTeam}</p>}
+              <p className="text-md font-black text-amber-200">{family_feudBuzzedName}</p>
+              {family_feudBuzzedTeam && <p className="text-[10px] font-bold text-slate-450 uppercase font-mono">{family_feudBuzzedTeam}</p>}
               <p className="text-[10px] text-amber-500 font-sans italic mt-1 font-bold">¡Toca responder ahora!</p>
             </div>
           ) : (
@@ -1208,12 +1216,12 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
               onClick={() => {
                 socket.emit("game:player-message", {
                   pin: joinedPin,
-                  event: "mexicanos:player-buzz",
+                  event: "family_feud:player-buzz",
                   name: playerInfo?.name || "Estudiante",
                   teamId: playerInfo?.teamId || ""
                 });
               }}
-              disabled={mexicanosBuzzerLocked}
+              disabled={family_feudBuzzerLocked}
               className="w-full aspect-square max-w-[170px] mx-auto rounded-full bg-gradient-to-tr from-rose-600 to-red-500 active:from-rose-700 active:to-red-600 flex flex-col items-center justify-center border-4 border-slate-850 hover:scale-103 shadow-2xl active:scale-97 transition-all cursor-pointer select-none text-white disabled:opacity-20 disabled:cursor-not-allowed"
             >
               <span className="text-3xl">🛎️</span>
@@ -1248,7 +1256,7 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
                 onClick={() => {
                   socket.emit("game:player-message", {
                     pin: joinedPin,
-                    event: "mexicanos:player-buzz",
+                    event: "family_feud:player-buzz",
                     name: playerInfo?.name || "Estudiante",
                     teamId: playerInfo?.teamId || ""
                   });
@@ -1267,26 +1275,6 @@ export default function StudentInterface({ initialPin, initialGame }: StudentInt
             </div>
           )}
         </div>
-      );
-    }
-    else if (activeGameType === "pictionary") {
-      gameView = (
-        <PictionaryStudent socket={socket} pin={joinedPin} />
-      );
-    }
-    else if (activeGameType === "headbanz") {
-      gameView = (
-        <HeadbanzStudent socket={socket} pin={joinedPin} playerName={name} playerId={socket.id || name} />
-      );
-    }
-    else if (activeGameType === "conecta_4") {
-      gameView = (
-        <Conecta4Student socket={socket} pin={joinedPin} playerName={name} playerId={socket.id || name} />
-      );
-    }
-    else if (activeGameType === "horse-race" || activeGameType === "horse_race") {
-      gameView = (
-        <HorseRaceStudent socket={socket} pin={joinedPin} />
       );
     }
     else if (activeGameType === "exam") {

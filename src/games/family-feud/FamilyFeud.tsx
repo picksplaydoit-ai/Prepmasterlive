@@ -8,7 +8,7 @@ import { playGameSound, getSoundsEnabled, setSoundsEnabled } from "../../lib/sou
 import TeacherBuzzerPanel from "../../components/TeacherBuzzerPanel";
 import { BuzzerPress } from "../../core/BuzzerEngine";
 
-interface MexicanosProps {
+interface FamilyFeudProps {
   quiz: Questionnaire;
   pin: string;
   players: Player[];
@@ -22,7 +22,7 @@ interface SurveyAnswer {
   revealed: boolean;
 }
 
-export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: MexicanosProps) {
+export default function FamilyFeud({ quiz, pin, players, teams, onBackToMenu }: FamilyFeudProps) {
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [surveyAnswers, setSurveyAnswers] = useState<SurveyAnswer[]>([]);
   const [strikes, setStrikes] = useState(0);
@@ -93,7 +93,7 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
     // Broadcast current question text to students
     socket.emit("game:host-message", {
       pin,
-      event: "mexicanos:question",
+      event: "family_feud:question",
       questionText: currentQ.text,
       answersCount: parsed.length
     });
@@ -164,7 +164,7 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
     // Clear buzzed state on client side
     socket.emit("game:host-message", {
       pin,
-      event: "mexicanos:clear-buzz"
+      event: "family_feud:clear-buzz"
     });
     setCurrentQuestionIndex(prev => prev + 1);
   };
@@ -178,7 +178,7 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
     setBuzzedPlayer(null);
     socket.emit("game:host-message", {
       pin,
-      event: "mexicanos:clear-buzz"
+      event: "family_feud:clear-buzz"
     });
   };
 
@@ -199,7 +199,7 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
   if (gameOver) {
     const winner = getWinningTeam();
     return (
-      <div className="bg-slate-900 text-white min-h-[500px] border border-slate-800 rounded-3xl p-8 text-center space-y-8 shadow-2xl relative overflow-hidden" id="mexicanos-end-screen">
+      <div className="bg-slate-900 text-white min-h-[500px] border border-slate-800 rounded-3xl p-8 text-center space-y-8 shadow-2xl relative overflow-hidden" id="family_feud-end-screen">
         <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-emerald-500 via-amber-500 to-rose-500" />
         
         <div className="max-w-md mx-auto space-y-4">
@@ -257,7 +257,7 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
   const currentQ = quiz.questions[currentQuestionIndex];
 
   return (
-    <div className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl relative overflow-hidden" id="mexicanos-board-screen">
+    <div className="bg-slate-900 border border-slate-800 text-slate-100 rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl relative overflow-hidden" id="family_feud-board-screen">
       
       {/* 3 Strikes Strike overlay animation */}
       {animateStrike && (
@@ -382,7 +382,7 @@ export default function Mexicanos({ quiz, pin, players, teams, onBackToMenu }: M
           {/* Universal Buzzer Panel */}
           <TeacherBuzzerPanel
             pin={pin}
-            gameMode="mexicanos"
+            gameMode="family_feud"
             onSelectWinner={handleSelectWinner}
             disabledWinners={disabledWinners}
           />
