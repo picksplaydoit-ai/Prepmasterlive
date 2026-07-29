@@ -133,13 +133,18 @@ function createWindow() {
   if (!isDev) {
     mainWindow.setMenuBarVisibility(false);
   }
-  const loadUrl = "http://localhost:3000";
-  mainWindow.loadURL(loadUrl).catch((err) => {
+  const startUrl = "http://localhost:3000";
+  console.log("Intentando cargar frontend en:", startUrl);
+  mainWindow.webContents.on("did-fail-load", (event, errorCode, errorDescription) => {
+    console.error("Error cargando frontend:", errorCode, errorDescription);
+  });
+  mainWindow.loadURL(startUrl).catch((err) => {
     console.log("Fallo al cargar URL, reintentando...", err);
     setTimeout(() => {
-      mainWindow?.loadURL(loadUrl);
+      mainWindow?.loadURL(startUrl);
     }, 1e3);
   });
+  mainWindow.webContents.openDevTools();
   mainWindow.on("closed", () => {
     mainWindow = null;
   });

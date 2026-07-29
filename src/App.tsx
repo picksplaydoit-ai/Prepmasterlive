@@ -106,7 +106,7 @@ function AppContent() {
 
       <main className="flex-1 py-8 px-4 sm:px-8 max-w-7xl mx-auto w-full flex flex-col justify-center" id="app-workspace">
         <Routes>
-          <Route path="/" element={<AutoRouter />} />
+          <Route path="/" element={<Navigate to="/teacher" />} />
           <Route path="/teacher" element={
             <div className="w-full flex-1 animate-fade-in" id="teacher-workspace-container">
               <TeacherGate>
@@ -152,7 +152,7 @@ function AppContent() {
               <StudentRoute />
             </div>
           } />
-          <Route path="*" element={<Navigate to="/" replace />} />
+          <Route path="*" element={<Navigate to="/teacher" />} />
         </Routes>
       </main>
 
